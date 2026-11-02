@@ -1,0 +1,854 @@
+# PROJECT: AI-POWERED CURRICULUM DESIGN & UNIVERSITY REVIEW MANAGEMENT SYSTEM
+
+Act as a Senior Full-Stack Developer, AI Engineer, Database Architect, and UI/UX Designer.
+
+I want you to develop a complete, production-ready web application called **AI-Powered Curriculum Design & University Review Management System**.
+
+The application must support multiple universities from one centralized Admin portal. The Admin generates complete academic curricula using AI based on UGC, NEP 2020, NCrF, NHEQF, and applicable university regulations. Each university has its own Reviewer login. Reviewers can access only their assigned university's curricula, review documents, submit comments, upload corrected documents, and approve or request revisions.
+
+IMPORTANT: Build a real, functional, database-connected application. Do not create only static screens or dummy data.
+
+---
+
+# 1. TECHNOLOGY STACK
+
+Frontend:
+- React
+- Vite
+- TypeScript
+- Tailwind CSS
+- React Router
+- Axios
+- Lucide React icons
+
+Backend:
+- Python FastAPI
+- SQLAlchemy ORM
+- Alembic migrations
+- Pydantic validation
+- JWT authentication
+
+Database:
+- PostgreSQL
+- pgvector for AI document retrieval
+- JSONB for structured curriculum content
+
+AI:
+- LLM API integration
+- Retrieval-Augmented Generation (RAG)
+- Embeddings
+- Regulatory knowledge retrieval
+- Structured JSON generation
+- AI-powered curriculum generation
+
+Document processing:
+- PyMuPDF
+- python-docx
+- ReportLab
+
+File storage:
+- Private Google Cloud Storage or S3-compatible storage
+
+Background processing:
+- Redis
+- Celery or equivalent background task system
+
+Deployment:
+- Frontend: Vercel
+- Backend: Google Cloud Run
+- Database: PostgreSQL hosted database
+
+Keep the frontend and backend in separate folders.
+
+---
+
+# 2. APPLICATION LOGIN SYSTEM
+
+There must be exactly TWO main login types.
+
+A. ADMIN LOGIN
+B. UNIVERSITY REVIEWER LOGIN
+
+ADMIN:
+- Centralized Admin account.
+- Admin manages multiple universities.
+- Admin manages regulatory documents.
+- Admin generates curricula.
+- Admin publishes curricula to selected universities.
+- Admin receives feedback from all university reviewers.
+- Admin manages revisions and final approvals.
+
+REVIEWER:
+- Each university has a unique Reviewer account.
+- Each Reviewer is assigned to a particular university.
+- Reviewer can see only the curricula assigned to their university.
+- Reviewer cannot access other universities' data.
+- Reviewer can submit comments.
+- Reviewer can upload corrected or annotated documents.
+- Reviewer can approve or request revisions.
+
+Implement JWT authentication, password hashing, protected routes, role-based authorization, and backend university-level access control.
+
+Generate temporary passwords for new reviewer accounts and require password changes at first login.
+
+---
+
+# 3. ADMIN PORTAL
+
+Create a professional Admin dashboard with the following sidebar:
+
+1. Dashboard
+2. Regulatory Knowledge Base
+3. AI Training & Configuration
+4. University Management
+5. Reviewer Management
+6. Programme Management
+7. Curriculum Generator
+8. Curriculum Library
+9. Assign & Publish Curriculum
+10. Reviewer Feedback
+11. Revision Management
+12. Approval Management
+13. Analytics & Reports
+14. Settings
+
+ADMIN DASHBOARD:
+
+Display:
+- Total Universities
+- Total Reviewer Accounts
+- Total Programmes
+- Total Generated Curricula
+- Pending Reviews
+- Approved Curricula
+- Revision Requests
+- Recent Activities
+
+Provide university-wise statistics and curriculum status tracking.
+
+---
+
+# 4. UNIVERSITY MANAGEMENT
+
+Admin must be able to create and manage multiple universities.
+
+Create a university form with:
+
+- University Name
+- University Code
+- Address
+- Contact Person
+- Contact Email
+- Phone Number
+- University Logo
+- Status
+
+Automatically generate a unique University ID.
+
+Example:
+
+University A:
+- Name: ABC University
+- Code: ABC001
+- Reviewer Username: ABC001
+
+University B:
+- Name: XYZ University
+- Code: XYZ001
+- Reviewer Username: XYZ001
+
+Admin must be able to:
+
+- Add university.
+- Edit university.
+- Activate/deactivate university.
+- Create Reviewer account.
+- Reset Reviewer password.
+- Assign Reviewer to university.
+- View university-wise curricula.
+- View university-wise feedback.
+
+One university must never access another university's data.
+
+---
+
+# 5. REGULATORY KNOWLEDGE BASE
+
+This is one of the most important modules.
+
+The Admin must first upload and prepare regulatory documents before AI curriculum generation.
+
+Supported documents:
+
+- UGC regulations and frameworks
+- NEP 2020
+- National Credit Framework (NCrF)
+- National Higher Education Qualifications Framework (NHEQF)
+- Applicable university regulations
+- Additional approved academic guidelines
+
+FUNCTIONALITIES:
+
+1. Upload PDF and DOCX documents.
+2. Select regulatory category.
+3. Enter issuing authority.
+4. Enter document version.
+5. Enter effective date.
+6. Extract document text.
+7. Extract tables where possible.
+8. Split documents into searchable sections.
+9. Generate embeddings.
+10. Store chunks in pgvector.
+11. Extract relevant academic rules.
+12. Verify extracted rules through Admin.
+13. Maintain document versions.
+14. Archive obsolete regulations.
+
+Every regulatory rule must contain:
+- Source document.
+- Clause or section.
+- Page number.
+- Document version.
+- Effective date.
+- Applicability.
+- Verification status.
+
+Do not allow unverified or obsolete rules to silently become authoritative generation instructions.
+
+IMPORTANT AI ARCHITECTURE:
+
+Do not assume uploading documents means the AI model has been trained.
+
+Implement RAG to retrieve the appropriate regulatory documents during generation.
+
+Use a separate deterministic rules engine for credit calculations, programme duration, course categories, and other hard academic constraints.
+
+If regulations conflict, flag the conflict for Admin review. Never invent regulatory requirements.
+
+---
+
+# 6. PROGRAMME MANAGEMENT
+
+Admin must be able to create university-specific academic programmes.
+
+Programme fields:
+
+- University
+- Programme Name
+- Degree Type
+- Specialization
+- Programme Level
+- Duration
+- Number of Semesters
+- Academic Year
+- Qualification Level
+- Applicable Regulatory Documents
+- Applicable University Regulations
+
+Support different programme structures, such as UG and PG, with configurable durations and semester counts.
+
+---
+
+# 7. AI CURRICULUM GENERATOR
+
+This is the core module of the application.
+
+Admin selects a university and creates a curriculum for a particular programme.
+
+Example:
+
+University: ABC University
+Programme: B.E. Computer Science and Engineering
+Duration: 4 Years
+Semesters: 8
+Academic Year: 2027-2028
+
+AI must generate the COMPLETE PROGRAMME CURRICULUM.
+
+The generation process:
+
+STEP 1:
+Retrieve the applicable UGC, NEP 2020, NCrF, NHEQF, and university regulations.
+
+STEP 2:
+Identify the applicable regulatory requirements.
+
+STEP 3:
+Prepare the programme structure.
+
+STEP 4:
+Calculate and validate credits using the configured rules engine.
+
+STEP 5:
+Generate Programme Outcomes (POs).
+
+STEP 6:
+Generate Programme Specific Outcomes (PSOs).
+
+STEP 7:
+Generate semester-wise course allocation.
+
+STEP 8:
+Generate Course Outcomes (COs).
+
+STEP 9:
+Generate unit-wise syllabus for every course.
+
+STEP 10:
+Generate course descriptions and learning objectives.
+
+STEP 11:
+Generate teaching and learning methods.
+
+STEP 12:
+Generate assessment methods.
+
+STEP 13:
+Generate learning resources and references.
+
+STEP 14:
+Generate CO-PO and CO-PSO mapping.
+
+STEP 15:
+Run regulatory and credit validation.
+
+STEP 16:
+Show the complete curriculum to Admin for editing and approval.
+
+AI OUTPUT MUST INCLUDE:
+
+- Programme overview
+- Programme educational objectives
+- Programme outcomes
+- Programme-specific outcomes
+- Programme structure
+- Semester-wise curriculum
+- Course categories
+- Course codes
+- Course titles
+- Credits
+- Course outcomes
+- Unit-wise syllabus
+- Teaching methods
+- Assessment methods
+- Learning resources
+- CO-PO mapping
+- Credit distribution
+- Applicable regulatory references
+
+Generate structured JSON first, validate it, save it to PostgreSQL, and then create Word/PDF documents.
+
+The Admin must be able to:
+- Preview generated curriculum.
+- Edit any section.
+- Regenerate a selected section.
+- Save draft.
+- Run compliance validation.
+- Export Word.
+- Export PDF.
+- Publish the curriculum.
+
+Do not let AI automatically approve a curriculum or claim regulatory compliance without evidence and validation.
+
+---
+
+# 8. CURRICULUM LIBRARY
+
+Create a central library containing every generated curriculum.
+
+Display:
+- University
+- Programme
+- Curriculum Name
+- Academic Year
+- Version
+- Generation Date
+- Generation Status
+- Approval Status
+
+Provide:
+- Search.
+- Filters.
+- Programme-wise sorting.
+- University-wise sorting.
+- Document preview.
+- Download Word/PDF.
+- Edit.
+- Version history.
+- Publish.
+
+---
+
+# 9. ASSIGN & PUBLISH CURRICULUM
+
+This module connects Admin with the university Reviewer.
+
+Admin selects:
+
+1. University.
+2. Programme.
+3. Generated Curriculum.
+4. Curriculum Version.
+5. Assigned Reviewer.
+6. Review Deadline.
+7. Document.
+
+When Admin clicks PUBLISH:
+
+- Save the university assignment.
+- Link the curriculum to the selected university.
+- Link it to that university's assigned Reviewer.
+- Set status to PUBLISHED.
+- Notify the selected Reviewer.
+- Display the curriculum in that university's Reviewer dashboard.
+
+CRITICAL:
+
+If Admin publishes a curriculum to ABC University, it must appear ONLY in ABC University's Reviewer account.
+
+Never expose another university's curricula through frontend or backend APIs.
+
+---
+
+# 10. UNIVERSITY REVIEWER PORTAL
+
+Create a separate Reviewer dashboard with a different layout from Admin.
+
+Reviewer sidebar:
+
+1. Dashboard
+2. Assigned Curricula
+3. Document Review
+4. My Comments
+5. Upload Corrections
+6. Revision History
+7. Notifications
+8. Profile
+
+REVIEWER DASHBOARD:
+
+Display:
+- Total Assigned Curricula
+- Pending Reviews
+- Under Review
+- Revision Requested
+- Approved Curricula
+
+ASSIGNED CURRICULA:
+
+Display:
+- Curriculum Name
+- Programme
+- Academic Year
+- Version
+- Assigned Date
+- Due Date
+- Review Status
+- Action
+
+Reviewer can open only the curricula assigned to their university.
+
+---
+
+# 11. DOCUMENT REVIEW MODULE
+
+Build a professional document review screen.
+
+Recommended layout:
+
+LEFT PANEL:
+- Curriculum table of contents.
+- Programme overview.
+- Semester navigation.
+- Course navigation.
+
+CENTER PANEL:
+- PDF document viewer.
+- Page navigation.
+- Zoom controls.
+- Download option.
+
+RIGHT PANEL:
+- Comments.
+- Add comment.
+- Comment priority.
+- Attach supporting file.
+- Submit feedback.
+
+Reviewer can select a specific curriculum section and submit comments.
+
+Example:
+
+Programme: B.E. Computer Science
+Semester: 3
+Course: Data Structures
+Section: Course Outcomes
+
+Comment:
+"Please revise CO2 and CO3 to align with the prescribed learning objectives."
+
+Priority:
+High.
+
+Allow reviewers to:
+
+- Add comments.
+- Save feedback as draft.
+- Submit comments.
+- Upload annotated PDF.
+- Upload corrected Word document.
+- Upload additional supporting documents.
+- Request revisions.
+- Approve curriculum.
+
+Support both section-level comments and document-level attachments.
+
+---
+
+# 12. REVIEWER FEEDBACK IN ADMIN PORTAL
+
+When a Reviewer submits feedback, it must automatically appear in Admin's Reviewer Feedback module.
+
+Admin must see:
+
+- University Name
+- Programme
+- Curriculum Version
+- Reviewer Name
+- Comment
+- Commented Section
+- Priority
+- Uploaded Documents
+- Submitted Date
+- Review Status
+
+Admin actions:
+
+- View comments.
+- Reply to comments.
+- Mark comments resolved.
+- Download uploaded documents.
+- Edit curriculum.
+- Create revised version.
+- Upload updated Word/PDF.
+- Resubmit to Reviewer.
+
+Use in-app notifications and optionally email notifications.
+
+Implement real-time updates using WebSockets or a reliable notification polling mechanism.
+
+---
+
+# 13. CURRICULUM REVISION AND VERSION CONTROL
+
+Never overwrite an existing published curriculum version.
+
+Example:
+
+Version 1.0 – Admin generated and published.
+Version 1.0 – Reviewer submitted comments.
+Version 1.1 – Admin revised the curriculum.
+Version 1.1 – Admin republished.
+Version 1.1 – Reviewer approved.
+
+Every version must maintain:
+- Version number.
+- Original content.
+- Modified content.
+- Created by.
+- Created date.
+- Uploaded documents.
+- Reviewer comments.
+- Approval status.
+
+Provide a version comparison screen to show changes between versions.
+
+Keep comment statuses separate from overall curriculum statuses.
+
+Comment statuses:
+- Open
+- Admin Responded
+- Resolved
+- Reopened
+
+Curriculum statuses:
+- Draft
+- Generated
+- Admin Verified
+- Published
+- Under Review
+- Revision Requested
+- Approved
+- Archived
+
+Implement valid status transitions and prevent unauthorized status changes.
+
+---
+
+# 14. DATABASE DESIGN
+
+Use PostgreSQL and SQLAlchemy.
+
+Create the following tables:
+
+1. users
+2. universities
+3. university_reviewers
+4. regulatory_documents
+5. regulatory_rules
+6. regulatory_chunks
+7. university_regulation_mappings
+8. programmes
+9. programme_regulatory_mappings
+10. curricula
+11. curriculum_versions
+12. curriculum_sections
+13. curriculum_assignments
+14. review_comments
+15. review_documents
+16. comment_replies
+17. review_history
+18. notifications
+19. audit_logs
+20. generation_jobs
+21. validation_results
+22. ai_prompt_versions
+
+Use UUID primary keys and appropriate foreign keys.
+
+Use JSONB for flexible structured curriculum data.
+
+Use pgvector for regulatory embeddings.
+
+Create database migrations using Alembic.
+
+Add indexes for university_id, programme_id, curriculum_id, assignment_id, version_id, and other frequently queried columns.
+
+Implement database-level constraints and transactions where appropriate.
+
+Use PostgreSQL Row-Level Security as additional protection for university-scoped data.
+
+---
+
+# 15. BACKEND API STRUCTURE
+
+Create separate FastAPI routers:
+
+/api/auth
+/api/universities
+/api/reviewers
+/api/regulations
+/api/regulatory-rules
+/api/programmes
+/api/ai-generation
+/api/curricula
+/api/assignments
+/api/reviews
+/api/documents
+/api/revisions
+/api/notifications
+/api/reports
+
+Implement:
+- Request validation.
+- Response schemas.
+- Error handling.
+- Authentication dependencies.
+- Role authorization.
+- University ownership verification.
+- File upload validation.
+- Secure download authorization.
+- API pagination.
+- Search and filtering.
+
+Do not implement authorization only in React. Every protected API must validate the authenticated user's permissions.
+
+---
+
+# 16. UI/UX REQUIREMENTS
+
+Create a professional enterprise-level academic management application.
+
+DESIGN STYLE:
+
+- Modern SaaS dashboard.
+- White and light background.
+- Navy blue primary color.
+- Professional academic interface.
+- Clean typography.
+- Consistent spacing.
+- Rounded cards.
+- Simple icons.
+- Clear data tables.
+- Professional status badges.
+- Responsive design.
+
+Admin and Reviewer must have separate dashboards and sidebar navigation.
+
+Do not overcrowd screens.
+
+Use:
+- Reusable components.
+- Loading indicators.
+- Empty states.
+- Error messages.
+- Confirmation dialogs.
+- Toast notifications.
+- Searchable dropdowns.
+- Pagination.
+- Form validation.
+
+All buttons and controls must perform actual actions.
+
+Do not use static placeholder data as a substitute for backend functionality.
+
+---
+
+# 17. SECURITY AND DATA ISOLATION
+
+This is a multi-university application. Security is essential.
+
+Implement:
+
+- Password hashing using Argon2 or bcrypt.
+- JWT access and refresh tokens.
+- Role-based access control.
+- University-specific authorization.
+- PostgreSQL Row-Level Security where appropriate.
+- Secure file uploads.
+- Private document storage.
+- Signed download URLs.
+- Input validation.
+- SQL injection protection.
+- Rate limiting.
+- Audit logs.
+- Secure environment variables.
+- Database backups.
+
+A Reviewer from ABC University must never be able to retrieve XYZ University's curriculum by changing a URL, API parameter, UUID, or request body.
+
+Admin has centralized access to all universities.
+
+---
+
+# 18. DEVELOPMENT INSTRUCTIONS
+
+Develop the application in the following order:
+
+PHASE 1:
+Project setup, database configuration, authentication and separate Admin/Reviewer dashboards.
+
+PHASE 2:
+University management and Reviewer account management.
+
+PHASE 3:
+Regulatory document upload, extraction, RAG and verified rules.
+
+PHASE 4:
+Programme management and credit calculation engine.
+
+PHASE 5:
+AI-powered complete curriculum generation.
+
+PHASE 6:
+Curriculum library, Word/PDF generation and publishing.
+
+PHASE 7:
+Reviewer portal, document viewing, comments and corrected document uploads.
+
+PHASE 8:
+Admin feedback dashboard, version control, notifications and approval workflow.
+
+PHASE 9:
+Testing, security checks and deployment.
+
+For each phase:
+
+1. Explain the implementation plan.
+2. Create the required files.
+3. Implement backend APIs.
+4. Implement frontend screens.
+5. Connect frontend with backend.
+6. Create database migrations.
+7. Test the complete workflow.
+8. Fix errors before proceeding.
+9. Document completed functionality.
+
+Do not skip phases.
+
+Do not generate the entire application as disconnected code snippets.
+
+Maintain a working project structure throughout development.
+
+---
+
+# 19. TESTING REQUIREMENTS
+
+Test the following real-world scenario:
+
+1. Admin logs in.
+2. Admin creates ABC University.
+3. Admin creates ABC University's Reviewer account.
+4. Admin creates XYZ University.
+5. Admin creates XYZ University's Reviewer account.
+6. Admin uploads UGC and NEP documents.
+7. Admin verifies regulatory rules.
+8. Admin configures B.E. Computer Science for ABC University.
+9. AI generates the curriculum.
+10. Admin validates and publishes Version 1.0 to ABC University.
+11. ABC Reviewer logs in.
+12. ABC Reviewer opens the assigned curriculum.
+13. ABC Reviewer submits three comments.
+14. ABC Reviewer uploads an annotated document.
+15. Admin logs in and sees all three comments and the uploaded document.
+16. Admin replies to the comments.
+17. Admin revises the curriculum and publishes Version 1.1.
+18. ABC Reviewer sees Version 1.1.
+19. ABC Reviewer reviews and approves it.
+20. Admin sees the final approved status.
+
+Also verify:
+
+- XYZ Reviewer cannot see ABC University's curriculum.
+- ABC Reviewer cannot access XYZ University's curriculum.
+- Reviewer cannot access Admin APIs.
+- Old versions remain available.
+- Comments remain linked to the correct version.
+- File downloads require authorization.
+
+---
+
+# 20. FIRST ACTION – START DEVELOPMENT
+
+Before coding:
+
+1. Inspect the current project directory.
+2. Identify whether frontend and backend already exist.
+3. Check the installed dependencies.
+4. Check the database connection.
+5. Review existing source files.
+6. Create a development plan.
+7. Identify missing modules.
+8. Create the initial database architecture.
+
+Do not delete or replace existing working code without understanding it.
+
+If this is a new project, initialize the frontend and backend from scratch.
+
+Start with PHASE 1 only.
+
+After Phase 1 is completed, provide:
+- Files created.
+- Database tables created.
+- APIs implemented.
+- Screens implemented.
+- Testing results.
+- Remaining tasks for Phase 2.
+
+Wait for confirmation before moving to the next phase.
+
+**FINAL EXPECTATION:**
+
+Build a fully functional, secure, AI-powered, multi-university curriculum management platform in which one centralized Admin generates programme-wise curricula based on verified regulatory knowledge, publishes them to individual university Reviewer accounts, receives feedback and corrected documents, manages revisions, and obtains final approval.
+
+The application must be scalable, maintainable, secure, and ready for real university usage.
