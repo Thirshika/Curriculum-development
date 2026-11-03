@@ -162,7 +162,6 @@ def assignment_response(assignment: CurriculumAssignment) -> dict:
         "status": assignment.status,
         "deadline": assignment.deadline,
         "published_at": assignment.published_at,
-        "validation_status": assignment.version.validation_status,
     }
 
 
@@ -224,8 +223,6 @@ def build_review_response(db: DbSession, assignment: CurriculumAssignment, inclu
     return ReviewerReviewResponse(
         assignment=assignment_response(assignment),
         curriculum_content=assignment.version.content,
-        regulatory_references=assignment.version.regulatory_references,
-        validation_checks=assignment.version.validation_checks,
         comments=[comment_response(comment) for comment in comments],
         documents=[document_response(document) for document in documents],
         history=[history_response(event) for event in history],

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
-import { AlertTriangle, ArrowUpRight, FileCheck2, Library, LoaderCircle, Save, Sparkles } from "lucide-react";
+import { ArrowUpRight, Library, LoaderCircle, Save, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
@@ -83,7 +83,7 @@ export default function CurriculumGenerationPage() {
       setSelected(data);
       setEditor(toEditorValue(data));
       setGenerations((current) => [data, ...current]);
-      setNotice("Curriculum draft generated. Review the source evidence and credit checks before using it.");
+      setNotice("Curriculum draft generated. Review and edit the draft before using it.");
     } catch (reason) {
       setError(getErrorMessage(reason));
     } finally {
@@ -102,7 +102,7 @@ export default function CurriculumGenerationPage() {
       setSelected(data);
       setEditor(toEditorValue(data));
       setGenerations((current) => current.map((job) => job.id === data.id ? data : job));
-      setNotice("Draft saved and its credit distribution recalculated.");
+      setNotice("Draft saved.");
     } catch (reason) {
       setError(getErrorMessage(reason));
     } finally {
@@ -132,13 +132,9 @@ export default function CurriculumGenerationPage() {
       <div>
         <p className="text-sm font-medium text-navy">PHASE 5 · AI-ASSISTED DRAFTING</p>
         <h1 className="mt-2 text-[30px] font-bold tracking-tight text-ink">Curriculum generation</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Generate a complete structured programme draft using its active, mapped, verified regulatory evidence. Every generated draft remains subject to Admin review.</p>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Generate a structured programme draft for Admin review and editing.</p>
       </div>
       <Link to="/admin/programmes" className="inline-flex items-center gap-2 text-sm font-semibold text-navy hover:underline">Programme management <ArrowUpRight size={16} /></Link>
-    </div>
-    <div className="mt-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-      <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-700" />
-      <p className="text-xs leading-5 text-amber-900"><strong>AI output is a draft, not regulatory approval.</strong> Programme details and retrieved verified excerpts are sent to the configured OpenAI API. Credit checks are recalculated deterministically from the configured verified constraints; a passed check is not full compliance approval.</p>
     </div>
     {notice && <div role="status" className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div>}
     {error && <div role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
@@ -171,23 +167,10 @@ export default function CurriculumGenerationPage() {
         {selected.status === "completed" && <div className="flex flex-wrap gap-2"><button onClick={() => void saveDraft()} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"><Save size={16} />Save edited draft</button><button onClick={() => void addToLibrary()} disabled={busy || libraryIds.includes(selected.id)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-navy px-3 py-2 text-sm font-semibold text-white hover:bg-[#102f5e] disabled:opacity-50"><Library size={16} />{libraryIds.includes(selected.id) ? "In curriculum library" : "Add to library"}</button></div>}
       </div>
       {selected.failure_reason && <p role="alert" className="mt-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{selected.failure_reason}</p>}
-      {selected.validation_status && <div className={`mt-4 rounded-lg p-3 text-sm ${selected.validation_status === "passed" ? "bg-emerald-50 text-emerald-800" : selected.validation_status === "failed" ? "bg-rose-50 text-rose-800" : "bg-amber-50 text-amber-900"}`}>
-        <p className="font-semibold">Deterministic credit check: {selected.validation_status}</p>
-        {selected.validation_checks.map((check, index) => <p key={`${check.rule_id ?? "none"}-${index}`} className="mt-1 text-xs">{check.message}</p>)}
-      </div>}
-      {selected.curriculum && <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      {selected.curriculum && <div className="mt-5">
         <label className="text-sm font-semibold text-slate-700">Editable curriculum JSON
           <textarea className="form-input mt-2 min-h-[620px] font-mono text-xs leading-5" spellCheck={false} value={editor} onChange={(event) => setEditor(event.target.value)} />
         </label>
-        <aside>
-          <h3 className="flex items-center gap-2 text-sm font-bold text-ink"><FileCheck2 size={16} />Cited regulatory evidence</h3>
-          <div className="mt-3 space-y-3">{selected.regulatory_references.map((reference) => <article key={reference.rule_id} className="rounded-xl border border-slate-200 p-3">
-            <p className="text-xs font-semibold text-slate-800">{reference.title} · v{reference.version}</p>
-            <p className="mt-1 text-[11px] text-slate-500">{reference.issuing_authority}{reference.clause ? ` · ${reference.clause}` : ""}{reference.page_number ? ` · page ${reference.page_number}` : ""}</p>
-            <blockquote className="mt-2 border-l-2 border-blue-200 pl-2 text-xs leading-5 text-slate-600">{reference.text}</blockquote>
-            <p className="mt-2 text-[11px] leading-5 text-navy">{reference.application}</p>
-          </article>)}</div>
-        </aside>
       </div>}
     </section>}
   </PortalLayout>;

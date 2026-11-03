@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.curriculum_exports import render_curriculum_docx, render_curriculum_pdf
-from app.curriculum_generation import build_cited_evidence, validate_curriculum
+from app.curriculum_generation import validate_curriculum
 from app.dependencies import CurrentUser, DbSession, require_role
 from app.models import (
     CurriculumAssignment,
@@ -24,7 +24,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.routers.ai_generation import get_applicable_constraints, validation_for
+from app.routers.ai_generation import response_content
 from app.schemas import (
     CurriculumAssignmentResponse,
     CurriculumDraftContent,
@@ -33,7 +33,6 @@ from app.schemas import (
     CurriculumLibraryUpdate,
     CurriculumPublishRequest,
     CurriculumVersionResponse,
-    CreditCheckResult,
     GeneratedCurriculumContent,
     NotificationReadResponse,
     NotificationResponse,
@@ -63,9 +62,6 @@ def version_response(version: CurriculumVersion) -> CurriculumVersionResponse:
         id=version.id,
         version_number=version.version_number,
         content=version.content,
-        regulatory_references=version.regulatory_references,
-        validation_status=version.validation_status,
-        validation_checks=[CreditCheckResult.model_validate(check) for check in version.validation_checks],
         created_at=version.created_at,
     )
 
@@ -106,7 +102,6 @@ def assignment_response(assignment: CurriculumAssignment) -> CurriculumAssignmen
         status=assignment.status,
         deadline=assignment.deadline,
         published_at=assignment.published_at,
-        validation_status=assignment.version.validation_status,
     )
 
 
@@ -131,7 +126,6 @@ def export_response(
         "academic_year": programme.academic_year,
         "version_number": version.version_number,
         "content": version.content,
-        "references": version.regulatory_references,
     }
     if file_format == "docx":
         content = render_curriculum_docx(**details)
@@ -222,9 +216,9 @@ def create_library_curriculum(
     version = CurriculumVersion(
         version_number=1,
         content=job.curriculum,
-        regulatory_references=job.regulatory_references,
-        validation_status=job.validation_status or "incomplete",
-        validation_checks=job.validation_checks,
+        regulatory_references=[],
+        validation_status="not_run",
+        validation_checks=[],
         created_by=admin.id,
     )
     item.versions.append(version)
@@ -273,35 +267,19 @@ def update_curriculum(
         generated = GeneratedCurriculumContent.model_validate(
             CurriculumDraftContent.model_validate(content).model_dump(exclude={"credit_distribution"})
         )
-        evidence_by_id = {
-            uuid.UUID(reference["rule_id"]): reference
-            for reference in version.regulatory_references
-        }
         try:
-            validate_curriculum(
-                generated,
-                semester_count=item.programme.semester_count,
-                retrieved_rule_ids=set(evidence_by_id),
-            )
+            validate_curriculum(generated, semester_count=item.programme.semester_count)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        from app.routers.ai_generation import response_content
-
         updated_content = CurriculumDraftContent.model_validate(response_content(generated))
-        references = build_cited_evidence(generated, evidence_by_id)
-        validation_status, checks = validation_for(
-            generated,
-            item.programme,
-            get_applicable_constraints(db, item.programme),
-        )
         new_version_number = item.current_version_number + 1
         item.versions.append(
             CurriculumVersion(
                 version_number=new_version_number,
                 content=updated_content.model_dump(mode="json"),
-                regulatory_references=references,
-                validation_status=validation_status,
-                validation_checks=checks,
+                regulatory_references=[],
+                validation_status="not_run",
+                validation_checks=[],
                 created_by=admin.id,
             )
         )
@@ -367,8 +345,6 @@ def publish_curriculum(
         if reviewer.college_id != college.id:
             raise HTTPException(status_code=403, detail="Select the active reviewer assigned to this college.")
     version = current_version(item)
-    if version.validation_status == "failed":
-        raise HTTPException(status_code=409, detail="Resolve failed credit checks before publishing this curriculum version.")
     assignment = CurriculumAssignment(
         curriculum_id=item.id,
         version_id=version.id,
@@ -407,12 +383,7 @@ def publish_curriculum(
         .filter(CurriculumAssignment.id == assignment.id)
         .first()
     )
-    warning = (
-        "Credit validation is incomplete because no applicable verified numeric constraints are configured."
-        if version.validation_status == "incomplete"
-        else None
-    )
-    return PublishResult(assignment=assignment_response(assignment), warning=warning)
+    return PublishResult(assignment=assignment_response(assignment))
 
 
 @router.post("/{curriculum_id}/archive", response_model=CurriculumLibraryResponse)

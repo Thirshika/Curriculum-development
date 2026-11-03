@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
 from app.database import SessionLocal, engine
 from app.models import University, UniversityStatus, User, UserRole
-from app.routers import ai_generation, auth, colleges, courses, curricula, curriculum_structures, dashboard, programmes, regulations, reviews, reviewers, universities
+from app.routers import ai_generation, auth, colleges, courses, credit_table, curricula, curriculum_structures, dashboard, programmes, regulations, reviews, reviewers, universities
 from app.schemas import HealthResponse
 from app.security import hash_password
 
@@ -78,11 +78,12 @@ app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(universities.router)
 app.include_router(colleges.router)
+app.include_router(regulations.router)
+app.include_router(regulations.rules_router)
+app.include_router(credit_table.router)
 app.include_router(courses.router)
 app.include_router(curriculum_structures.router)
 app.include_router(reviewers.router)
-app.include_router(regulations.router)
-app.include_router(regulations.rules_router)
 app.include_router(programmes.router)
 app.include_router(ai_generation.router)
 app.include_router(curricula.router)

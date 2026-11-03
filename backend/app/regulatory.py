@@ -1,170 +1,463 @@
 import hashlib
 import re
-from collections.abc import Iterable
-from dataclasses import dataclass
-from zipfile import BadZipFile, ZipFile
+from decimal import Decimal
 
-from docx import Document as WordDocument
-from docx.opc.exceptions import PackageNotFoundError
-from fastapi import HTTPException, UploadFile
 import pymupdf
 
-EMBEDDING_DIMENSIONS = 384
-SUPPORTED_MIME_TYPES = {
-    ".pdf": "application/pdf",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+RULE_VALUE = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*(?:academic\s+)?credits?\b", re.IGNORECASE)
+SEMESTER = re.compile(r"\bsemester\s*(\d{1,2})\b", re.IGNORECASE)
+CLAUSE = re.compile(r"\b(?:section|clause|regulation|rule)\s*[\d.]+", re.IGNORECASE)
+CATEGORY_NAMES = (
+    "Basic Science",
+    "Engineering Science",
+    "Humanities",
+    "Professional Core",
+    "Open Elective",
+    "Elective",
+    "Project",
+    "Internship",
+    "Major",
+    "Minor",
+    "Multidisciplinary",
+    "Ability Enhancement",
+    "Value-Added",
+    "Summer Internship",
+    "Research Project",
+    "Research",
+    "Vocational",
+    "Skill-Based",
+    "Discipline-Specific",
+    "Core",
+)
+GENERIC_CATEGORY_NAMES = {"different types of", "types of", "various", "relevant"}
+COURSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
+DECIMAL_VALUE = re.compile(r"^\d+(?:\.\d+)?$")
+LTP_VALUE = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*[-–—/]\s*(\d+(?:\.\d+)?)\s*[-–—/]\s*(\d+(?:\.\d+)?)\s*$"
+)
+ROMAN_SEMESTERS = {
+    "i": 1,
+    "ii": 2,
+    "iii": 3,
+    "iv": 4,
+    "v": 5,
+    "vi": 6,
+    "vii": 7,
+    "viii": 8,
+    "ix": 9,
+    "x": 10,
+    "xi": 11,
+    "xii": 12,
 }
-RULE_CUE = re.compile(
-    r"\b(shall|must|required|minimum|maximum|at least|not less than|credits?|duration|semester|"
-    r"qualification level|eligibility|mandatory|prohibited|may not)\b",
-    re.IGNORECASE,
-)
-CLAUSE_CUE = re.compile(
-    r"^\s*((?:clause|section|regulation|rule|article|chapter)\s+[\w.-]+|"
-    r"(?:\d+(?:\.\d+)*|[A-Z]\.\d+)[.)]?)\s*[:\-—]?\s*",
-    re.IGNORECASE,
-)
-WORD_CUE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*", re.UNICODE)
 
 
-@dataclass(frozen=True)
-class ExtractedPage:
-    page_number: int | None
-    text: str
-
-
-@dataclass(frozen=True)
-class ExtractedDocument:
-    pages: list[ExtractedPage]
-    page_count: int
-    warnings: list[str]
-
-
-async def read_upload(upload: UploadFile, maximum_bytes: int) -> bytes:
-    content = await upload.read(maximum_bytes + 1)
-    if len(content) > maximum_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds the {maximum_bytes // (1024 * 1024)} MB upload limit")
-    if not content:
-        raise HTTPException(status_code=422, detail="The uploaded document is empty")
-    return content
-
-
-def extract_document(filename: str, content: bytes) -> ExtractedDocument:
-    suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if suffix not in SUPPORTED_MIME_TYPES:
-        raise HTTPException(status_code=415, detail="Only PDF and DOCX documents are supported")
-    if suffix == ".pdf":
-        if not content.startswith(b"%PDF-"):
-            raise HTTPException(status_code=422, detail="The uploaded file is not a valid PDF")
-        try:
-            pages: list[ExtractedPage] = []
-            warnings: list[str] = []
-            with pymupdf.Document(stream=content, filetype="pdf") as document:
-                if document.is_encrypted:
-                    raise HTTPException(status_code=422, detail="Encrypted PDFs are not supported")
-                if document.page_count > 2000:
-                    raise HTTPException(status_code=413, detail="PDFs are limited to 2,000 pages")
-                for index, page in enumerate(document):
-                    page_text = page.get_text("text").strip()
-                    tables = []
-                    try:
-                        for table in page.find_tables().tables:
-                            rows = [" | ".join(cell or "" for cell in row) for row in table.extract()]
-                            tables.extend(row for row in rows if row.strip(" |"))
-                    except (AttributeError, RuntimeError):
-                        warnings.append(f"Table extraction was unavailable on PDF page {index + 1}.")
-                    combined = "\n".join(part for part in (page_text, "\n".join(tables)) if part)
-                    pages.append(ExtractedPage(index + 1, combined))
-        except HTTPException:
-            raise
-        except (RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail="The PDF could not be read") from exc
-        if any(not p.text.strip() for p in pages):
-            warnings.append("Some pages have no extractable text; scanned pages may require OCR.")
-        if not any(page.text.strip() for page in pages):
-            raise HTTPException(status_code=422, detail="The PDF contains no extractable text")
-        return ExtractedDocument(pages=pages, page_count=len(pages), warnings=warnings)
-
-    if not content.startswith(b"PK"):
-        raise HTTPException(status_code=422, detail="The uploaded DOCX file is invalid")
+def extract_pdf_pages(content: bytes) -> list[str]:
     try:
-        from io import BytesIO
-
-        with ZipFile(BytesIO(content)) as archive:
-            members = archive.infolist()
-            expanded_size = sum(member.file_size for member in members)
-            if len(members) > 10_000 or expanded_size > 100 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="DOCX archive exceeds document processing limits")
-            if "[Content_Types].xml" not in archive.namelist() or "word/document.xml" not in archive.namelist():
-                raise HTTPException(status_code=422, detail="The uploaded ZIP file is not a valid DOCX document")
-        document = WordDocument(BytesIO(content))
-    except (ValueError, KeyError, OSError, BadZipFile, PackageNotFoundError) as exc:
-        raise HTTPException(status_code=422, detail="The DOCX document could not be read") from exc
-    parts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
-    for table in document.tables:
-        for row in table.rows:
-            cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-            if any(cells):
-                parts.append(" | ".join(cells))
-    text = "\n".join(parts)
-    if not text:
-        raise HTTPException(status_code=422, detail="The DOCX contains no extractable text")
-    return ExtractedDocument(pages=[ExtractedPage(None, text)], page_count=0, warnings=["Page numbers are not available for DOCX files."])
+        with pymupdf.open(stream=content, filetype="pdf") as document:
+            if document.is_encrypted or document.page_count < 1:
+                raise ValueError("The PDF is encrypted or has no pages.")
+            return [page.get_text("text") for page in document]
+    except (pymupdf.FileDataError, pymupdf.EmptyFileError) as exc:
+        raise ValueError("The uploaded file is not a readable PDF.") from exc
 
 
-def split_pages(pages: Iterable[ExtractedPage], chunk_size: int, overlap: int) -> list[tuple[int | None, str]]:
-    chunks: list[tuple[int | None, str]] = []
-    for page in pages:
-        text = re.sub(r"\s+", " ", page.text).strip()
-        if not text:
-            continue
-        start = 0
-        while start < len(text):
-            end = min(start + chunk_size, len(text))
-            if end < len(text):
-                boundary = text.rfind(" ", start, end)
-                if boundary > start + chunk_size // 2:
-                    end = boundary
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append((page.page_number, chunk))
-            if end >= len(text):
-                break
-            start = max(start + 1, end - overlap)
-    return chunks
+def _category_for(text: str) -> str | None:
+    lowered = text.casefold()
+    for category in sorted(CATEGORY_NAMES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(category.casefold())}\b", lowered):
+            return category
+    match = re.search(
+        r"\b(?:in|for|under)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9/& -]{1,50}?)\s+(?:category|courses?)\b",
+        text,
+        re.IGNORECASE,
+    )
+    category = match.group(1).strip(" .,:;") if match else None
+    return None if category and category.casefold() in GENERIC_CATEGORY_NAMES else category
 
 
-def candidate_rules(pages: Iterable[ExtractedPage], limit: int = 200) -> list[tuple[str | None, int | None, str]]:
-    candidates: list[tuple[str | None, int | None, str]] = []
-    seen: set[str] = set()
-    for page in pages:
-        for raw_paragraph in re.split(r"(?<=[.!?])\s+|\n+", page.text):
-            paragraph = re.sub(r"\s+", " ", raw_paragraph).strip(" \t-•")
-            if len(paragraph) < 30 or not RULE_CUE.search(paragraph):
+def _bound(text: str) -> str:
+    lowered = text.casefold()
+    if re.search(r"\b(minimum|min\.?|at least|not less than)\b", lowered):
+        return "minimum"
+    if re.search(r"\b(maximum|max\.?|at most|not more than|not exceed)\b", lowered):
+        return "maximum"
+    return "total"
+
+
+def extract_credit_rules(pages: list[str]) -> list[dict]:
+    rules: list[dict] = []
+    for page_number, page_text in enumerate(pages, start=1):
+        for line in re.split(r"(?<=[.;])\s+|\n+", page_text):
+            text = " ".join(line.split()).strip()
+            if not text or not re.search(r"\bcredits?\b", text, re.IGNORECASE):
                 continue
-            key = paragraph.casefold()
-            if key in seen:
+            number = RULE_VALUE.search(text)
+            if number is None:
                 continue
-            seen.add(key)
-            clause_match = CLAUSE_CUE.match(paragraph)
-            candidates.append((clause_match.group(1).rstrip(".):") if clause_match else None, page.page_number, paragraph))
-            if len(candidates) >= limit:
-                return candidates
-    return candidates
+            category = _category_for(text)
+            semester_match = SEMESTER.search(text)
+            semester = int(semester_match.group(1)) if semester_match else None
+            bound = _bound(text)
+            if category:
+                rule_type = (
+                    "category_min"
+                    if bound == "minimum"
+                    else "category_max"
+                    if bound == "maximum"
+                    else "category_total"
+                )
+            elif semester is not None:
+                rule_type = "semester_min" if bound == "minimum" else "semester_max" if bound == "maximum" else "semester_total"
+            elif re.search(r"\b(total|programme|program|degree)\b", text, re.IGNORECASE) or bound in {"minimum", "maximum"}:
+                rule_type = "total_min" if bound == "minimum" else "total_max" if bound == "maximum" else "other"
+            else:
+                rule_type = "other"
+            clause_match = CLAUSE.search(text)
+            rules.append(
+                {
+                    "text": text[:4000],
+                    "page_number": page_number,
+                    "clause": clause_match.group(0) if clause_match else None,
+                    "rule_type": rule_type,
+                    "category": category,
+                    "semester": semester,
+                    "value": Decimal(number.group("value")) if number and rule_type != "other" else None,
+                }
+            )
+    return rules
 
 
-def local_embedding(value: str) -> list[float]:
-    """Privacy-preserving signed feature hashing for local lexical retrieval."""
-    tokens = [match.group(0).casefold() for match in WORD_CUE.finditer(value)]
-    features = tokens + [f"{left}_{right}" for left, right in zip(tokens, tokens[1:])]
-    vector = [0.0] * EMBEDDING_DIMENSIONS
-    for feature in features:
-        digest = hashlib.blake2b(feature.encode("utf-8"), digest_size=8).digest()
-        number = int.from_bytes(digest, "little")
-        vector[number % EMBEDDING_DIMENSIONS] += 1.0 if number >> 63 else -1.0
-    norm = sum(component * component for component in vector) ** 0.5
-    return [component / norm for component in vector] if norm else vector
+def _credit_requirement_columns(rows: list[list[str | None]]) -> tuple[int, int] | None:
+    for header_end in range(min(3, len(rows))):
+        column_count = max((len(row) for row in rows[: header_end + 1]), default=0)
+        headers = [
+            " ".join(
+                " ".join((rows[row_index][column] or "").split())
+                for row_index in range(header_end + 1)
+                if column < len(rows[row_index]) and rows[row_index][column]
+            ).casefold()
+            for column in range(column_count)
+        ]
+        category_index = next(
+            (index for index, value in enumerate(headers) if "category of course" in value or "broad category" in value),
+            None,
+        )
+        combined_headers = re.sub(r"\s+", "", "".join(headers))
+        requirement_index = next(
+            (
+                index
+                for index, value in enumerate(headers)
+                if "minimum" in value or "credit" in value or "requirement" in value
+            ),
+            None,
+        )
+        has_minimum_requirement = (
+            "minimumcreditrequirement" in combined_headers
+            or "minimumcreditrequirements" in combined_headers
+        )
+        if category_index is not None and requirement_index is not None and has_minimum_requirement:
+            return category_index, header_end
+    return None
 
 
-def cosine_similarity(left: list[float], right: list[float]) -> float:
-    return sum(a * b for a, b in zip(left, right, strict=True))
+def _credit_range(value: str | None) -> tuple[Decimal, Decimal] | None:
+    text = " ".join((value or "").split()).replace("−", "-").replace("�", "-")
+    values = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if values:
+        lower, upper = Decimal(values.group(1)), Decimal(values.group(2))
+        return (min(lower, upper), max(lower, upper))
+    single = _cell_decimal(text)
+    return (single, single) if single is not None else None
+
+
+def _credit_category(value: str) -> str | None:
+    normalized = " ".join(value.split()).strip(" .:")
+    lowered = normalized.casefold()
+    if lowered.startswith("total"):
+        return "total"
+    if "major" in lowered:
+        return "Major"
+    if "minor" in lowered:
+        return "Minor"
+    if "multidisciplinary" in lowered or "inter-disciplinary" in lowered or "interdisciplinary" in lowered:
+        return "Multidisciplinary"
+    if "ability enhancement" in lowered:
+        return "Ability Enhancement"
+    if "skill enhancement" in lowered or "skill-based" in lowered:
+        return "Skill-Based"
+    if "value added" in lowered or "value-added" in lowered:
+        return "Value-Added"
+    if "summer internship" in lowered:
+        return "Summer Internship"
+    if "research project" in lowered or "dissertation" in lowered:
+        return "Research Project"
+    return None
+
+
+def extract_credit_table_rules(content: bytes) -> list[dict]:
+    rules: list[dict] = []
+    try:
+        with pymupdf.open(stream=content, filetype="pdf") as document:
+            continuing_credit_table = False
+            for page_number, page in enumerate(document, start=1):
+                tables = page.find_tables().tables
+                current_page_has_header = False
+                for table in tables:
+                    rows = table.extract()
+                    header = _credit_requirement_columns(rows)
+                    if header:
+                        category_index, header_end = header
+                        first_data_row = header_end + 1
+                        current_page_has_header = True
+                    elif continuing_credit_table:
+                        category_index, first_data_row = 1, 0
+                    else:
+                        continue
+
+                    for row in rows[first_data_row:]:
+                        category_text = (
+                            " ".join((row[category_index] or "").split()).strip()
+                            if category_index < len(row)
+                            else ""
+                        )
+                        category = _credit_category(category_text)
+                        if category is None:
+                            continue
+                        values = [
+                            " ".join((value or "").split()).strip()
+                            for value in row[category_index + 1 :]
+                            if value and value.strip()
+                        ][:2]
+                        for duration, raw_value in zip((3, 4), values):
+                            if category == "total":
+                                total_value = _cell_decimal(raw_value)
+                                rules.append(
+                                    {
+                                        "text": (
+                                            f"Total minimum credit requirement: {raw_value} credits."
+                                        ),
+                                        "page_number": page_number,
+                                        "clause": "Credit requirement table",
+                                        "rule_type": "total_min",
+                                        "category": None,
+                                        "semester": None,
+                                        "programme_duration_years": duration,
+                                        "value": total_value,
+                                    }
+                                )
+                                continue
+                            credit_range = _credit_range(raw_value)
+                            value = credit_range[0] if credit_range else None
+                            display_value = (
+                                f"{credit_range[0]:g}–{credit_range[1]:g}"
+                                if credit_range and credit_range[0] != credit_range[1]
+                                else raw_value
+                            )
+                            rules.append(
+                                {
+                                    "text": (
+                                        f"Broad category of course: {category_text}; "
+                                        f"minimum credit requirement: {display_value} credits."
+                                    ),
+                                    "page_number": page_number,
+                                    "clause": "Credit requirement table",
+                                    "rule_type": "category_min",
+                                    "category": category,
+                                    "semester": None,
+                                    "programme_duration_years": duration,
+                                    "value": value,
+                                }
+                            )
+                            if credit_range and credit_range[1] != credit_range[0]:
+                                rules.append(
+                                    {
+                                        "text": (
+                                            f"Broad category of course: {category_text}; "
+                                            f"minimum credit requirement: {display_value} credits."
+                                        ),
+                                        "page_number": page_number,
+                                        "clause": "Credit requirement table",
+                                        "rule_type": "category_max",
+                                        "category": category,
+                                        "semester": None,
+                                        "programme_duration_years": duration,
+                                        "value": credit_range[1],
+                                    }
+                                )
+                continuing_credit_table = current_page_has_header
+    except (pymupdf.FileDataError, pymupdf.EmptyFileError) as exc:
+        raise ValueError("The uploaded file is not a readable PDF.") from exc
+    return rules
+
+
+def _course_table_headers(rows: list[list[str | None]]) -> tuple[dict[str, int], int] | None:
+    best: tuple[dict[str, int], int, int] | None = None
+    for start in range(min(3, len(rows))):
+        for end in range(start, min(start + 3, len(rows))):
+            column_count = max((len(row) for row in rows[start : end + 1]), default=0)
+            headers = [
+                " ".join(
+                    " ".join((rows[row_index][column] or "").split())
+                    for row_index in range(start, end + 1)
+                    if column < len(rows[row_index]) and rows[row_index][column]
+                ).casefold()
+                for column in range(column_count)
+            ]
+            code_index = next(
+                (index for index, value in enumerate(headers) if re.search(r"\b(?:course|subject|paper)\s*(?:code|no\.?|number)\b", value)),
+                None,
+            )
+            name_index = next(
+                (index for index, value in enumerate(headers) if re.search(r"\b(?:course|subject)\s*(?:title|name)\b", value)),
+                None,
+            )
+            if name_index is None:
+                name_index = next(
+                    (index for index, value in enumerate(headers) if value.strip() in {"course", "subject"}),
+                    None,
+                )
+            category_index = next(
+                (index for index, value in enumerate(headers) if re.search(r"\bcategory\b", value)),
+                None,
+            )
+            semester_index = next(
+                (index for index, value in enumerate(headers) if re.search(r"\b(?:semester|sem\.?)\b", value)),
+                None,
+            )
+            credits_index = next(
+                (
+                    index
+                    for index, value in enumerate(headers)
+                    if re.search(r"\bcredits?\b", value)
+                    and not re.search(r"\b(?:credit\s+points?|minimum\s+credit\s+requirement)\b", value)
+                ),
+                None,
+            )
+            ltp_index = next(
+                (
+                    index
+                    for index, value in enumerate(headers)
+                    if re.search(r"\bl\s*[-–—/]\s*t\s*[-–—/]\s*p\b", value)
+                    or all(word in value for word in ("lecture", "tutorial", "practical"))
+                ),
+                None,
+            )
+            separate_hours = {
+                "lecture_hours": next((index for index, value in enumerate(headers) if value.strip() in {"l", "lec", "lecture", "lecture hours"}), None),
+                "tutorial_hours": next((index for index, value in enumerate(headers) if value.strip() in {"t", "tut", "tutorial", "tutorial hours"}), None),
+                "practical_hours": next((index for index, value in enumerate(headers) if value.strip() in {"p", "prac", "practical", "practical hours"}), None),
+            }
+            if None in {name_index, category_index, semester_index, credits_index}:
+                continue
+            if ltp_index is None and any(index is None for index in separate_hours.values()):
+                continue
+            found = {
+                "name": name_index,
+                "category": category_index,
+                "semester": semester_index,
+                "credits": credits_index,
+                **({"course_code": code_index} if code_index is not None else {}),
+                **({"ltp": ltp_index} if ltp_index is not None else separate_hours),
+            }
+            score = len(found)
+            if best is None or score > len(best[0]) or (score == len(best[0]) and end < best[1]):
+                best = (found, end, score)
+    return (best[0], best[1]) if best else None
+
+
+def _cell_decimal(value: str | None) -> Decimal | None:
+    text = " ".join((value or "").split())
+    return Decimal(text) if DECIMAL_VALUE.fullmatch(text) else None
+
+
+def _semester_number(value: str | None) -> int | None:
+    text = " ".join((value or "").split()).strip().casefold()
+    if text.isdecimal():
+        number = int(text)
+        return number if 1 <= number <= 24 else None
+    return ROMAN_SEMESTERS.get(text)
+
+
+def _generated_course_code(name: str, category: str, semester: int) -> str:
+    source = f"{name.casefold()}|{category.casefold()}|{semester}".encode("utf-8")
+    return f"AUTO{hashlib.sha256(source).hexdigest()[:20].upper()}"
+
+
+def extract_courses_from_pdf(content: bytes) -> list[dict]:
+    courses: list[dict] = []
+    seen_codes: set[str] = set()
+    try:
+        with pymupdf.open(stream=content, filetype="pdf") as document:
+            for page in document:
+                for table in page.find_tables().tables:
+                    rows = table.extract()
+                    header = _course_table_headers(rows)
+                    if header is None:
+                        continue
+                    columns, header_end = header
+                    previous_category: str | None = None
+                    previous_semester: int | None = None
+                    for row in rows[header_end + 1 :]:
+                        def cell(name: str) -> str:
+                            index = columns.get(name)
+                            return " ".join((row[index] or "").split()).strip() if index is not None and index < len(row) else ""
+
+                        name = cell("name")
+                        category = cell("category") or previous_category
+                        semester = _semester_number(cell("semester")) or previous_semester
+                        if category:
+                            previous_category = category
+                        if semester:
+                            previous_semester = semester
+                        credits = _cell_decimal(cell("credits"))
+                        if (
+                            len(name) < 3
+                            or len(name) > 200
+                            or re.fullmatch(r"(?:course|subject)\s+\d+", name, re.IGNORECASE)
+                            or not category
+                            or len(category) > 100
+                            or semester is None
+                            or credits is None
+                            or credits <= 0
+                        ):
+                            continue
+
+                        if "ltp" in columns:
+                            ltp = LTP_VALUE.fullmatch(cell("ltp"))
+                            if ltp is None:
+                                continue
+                            lecture_hours, tutorial_hours, practical_hours = (
+                                Decimal(value) for value in ltp.groups()
+                            )
+                        else:
+                            hours = {
+                                field: _cell_decimal(cell(field))
+                                for field in ("lecture_hours", "tutorial_hours", "practical_hours")
+                            }
+                            if any(value is None for value in hours.values()):
+                                continue
+                            lecture_hours = hours["lecture_hours"]
+                            tutorial_hours = hours["tutorial_hours"]
+                            practical_hours = hours["practical_hours"]
+
+                        course_code = cell("course_code").upper()
+                        if not COURSE_CODE.fullmatch(course_code):
+                            course_code = _generated_course_code(name, category, semester)
+                        if course_code.casefold() in seen_codes:
+                            continue
+                        seen_codes.add(course_code.casefold())
+                        courses.append(
+                            {
+                                "course_code": course_code,
+                                "name": name,
+                                "category": category,
+                                "semester": semester,
+                                "lecture_hours": lecture_hours,
+                                "tutorial_hours": tutorial_hours,
+                                "practical_hours": practical_hours,
+                                "credits": credits,
+                            }
+                        )
+    except (pymupdf.FileDataError, pymupdf.EmptyFileError) as exc:
+        raise ValueError("The uploaded file is not a readable PDF.") from exc
+    return courses

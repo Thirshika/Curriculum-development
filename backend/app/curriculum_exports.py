@@ -6,7 +6,7 @@ from docx import Document
 from docx.shared import Inches, Pt
 
 
-def _curriculum_lines(content: dict, references: list[dict]) -> list[tuple[str, bool]]:
+def _curriculum_lines(content: dict) -> list[tuple[str, bool]]:
     lines: list[tuple[str, bool]] = []
 
     def heading(value: str) -> None:
@@ -72,17 +72,6 @@ def _curriculum_lines(content: dict, references: list[dict]) -> list[tuple[str, 
                 f"{', '.join(mapping['programme_outcome_codes'])}"
             )
 
-    heading("Applicable regulatory references")
-    for reference in references:
-        citation = f"{reference['title']} (v{reference['version']})"
-        if reference.get("clause"):
-            citation += f", {reference['clause']}"
-        if reference.get("page_number"):
-            citation += f", page {reference['page_number']}"
-        paragraph(citation)
-        paragraph(reference["text"])
-        paragraph(f"Application: {reference['application']}")
-        paragraph("")
     return lines
 
 
@@ -94,7 +83,6 @@ def render_curriculum_docx(
     academic_year: str,
     version_number: int,
     content: dict,
-    references: list[dict],
 ) -> bytes:
     document = Document()
     section = document.sections[0]
@@ -103,8 +91,8 @@ def render_curriculum_docx(
     document.add_heading(title, level=0)
     metadata = document.add_paragraph()
     metadata.add_run(f"{university} | {programme} | Academic year {academic_year} | Version {version_number}")
-    document.add_paragraph("Admin-prepared curriculum document. Regulatory references are evidence, not an approval statement.")
-    for text, is_heading in _curriculum_lines(content, references):
+    document.add_paragraph("Admin-prepared curriculum document.")
+    for text, is_heading in _curriculum_lines(content):
         if not text:
             continue
         if is_heading:
@@ -124,7 +112,6 @@ def render_curriculum_pdf(
     academic_year: str,
     version_number: int,
     content: dict,
-    references: list[dict],
 ) -> bytes:
     document = pymupdf.open()
     page_width, page_height = 595, 842
@@ -157,9 +144,9 @@ def render_curriculum_pdf(
 
     write_line(title, True)
     write_line(f"{university} | {programme} | Academic year {academic_year} | Version {version_number}")
-    write_line("Admin-prepared curriculum document. Regulatory references are evidence, not an approval statement.")
+    write_line("Admin-prepared curriculum document.")
     write_line("")
-    for value, is_heading in _curriculum_lines(content, references):
+    for value, is_heading in _curriculum_lines(content):
         write_line(value, is_heading)
     result = document.tobytes()
     document.close()

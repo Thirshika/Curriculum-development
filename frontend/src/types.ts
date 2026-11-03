@@ -89,25 +89,6 @@ export interface College {
   created_at: string;
 }
 
-export interface Course {
-  id: string;
-  course_code: string;
-  name: string;
-  category: string;
-  course_type: string;
-  description: string;
-  objectives: string[];
-  credits: string;
-  lecture_hours: string;
-  tutorial_hours: string;
-  practical_hours: string;
-  prerequisites: string[];
-  programme_ids: string[];
-  status: "active" | "archived";
-  created_at: string;
-  updated_at: string;
-}
-
 export interface CurriculumStructure {
   id: string;
   programme_id: string;
@@ -120,8 +101,7 @@ export interface CurriculumStructure {
   version: {
     id: string;
     version_number: number;
-    content: { semesters: { semester_number: number; courses: { course_id: string; credits: string }[] }[] };
-    validation: (CreditValidation & { category_distribution?: Record<string, number>; warnings?: string[] }) | null;
+    content: { semesters: { semester_number: number; courses: { course_id?: string; course_code: string; name: string; category: string; course_type: string; credits: string }[] }[] };
     created_at: string;
   };
   created_at: string;
@@ -131,87 +111,6 @@ export interface CurriculumStructure {
 export interface ProvisionedReviewer {
   reviewer: Reviewer;
   temporary_password: string;
-}
-
-export interface RegulatoryDocument {
-  id: string;
-  title: string;
-  category: "ugc" | "nep_2020" | "ncrf" | "nheqf" | "university" | "other";
-  issuing_authority: string;
-  version: string;
-  effective_date: string | null;
-  applicability: string;
-  university_id: string | null;
-  university_name: string | null;
-  original_filename: string;
-  mime_type: string;
-  file_size: number;
-  page_count: number;
-  chunk_count: number;
-  status: "ready" | "archived";
-  extraction_warnings: string[];
-  pending_rules: number;
-  verified_rules: number;
-  rejected_rules: number;
-  created_at: string;
-  archived_at: string | null;
-}
-
-export type CreditConstraintKind =
-  | "min_total_credits"
-  | "max_total_credits"
-  | "min_semester_credits"
-  | "max_semester_credits"
-  | "min_duration_years"
-  | "max_duration_years"
-  | "min_semesters"
-  | "max_semesters";
-
-export interface CreditConstraint {
-  id: string;
-  rule_id: string;
-  kind: CreditConstraintKind;
-  value: string;
-  rule_text: string;
-  clause: string | null;
-  page_number: number | null;
-  document_id: string;
-  document_title: string;
-  document_category: RegulatoryDocument["category"];
-  document_version: string;
-  effective_date: string | null;
-  applicability: string;
-}
-
-export interface RegulatoryRule {
-  id: string;
-  document_id: string;
-  document_title: string;
-  category: RegulatoryDocument["category"];
-  issuing_authority: string;
-  version: string;
-  effective_date: string | null;
-  applicability: string;
-  clause: string | null;
-  page_number: number | null;
-  text: string;
-  verification_status: "pending" | "verified" | "rejected";
-  has_conflict: boolean;
-  conflict_note: string | null;
-  verified_at: string | null;
-}
-
-export interface ProgrammeRegulation {
-  document_id: string;
-  title: string;
-  category: RegulatoryDocument["category"];
-  issuing_authority: string;
-  version: string;
-  effective_date: string | null;
-  applicability: string;
-  status: "ready" | "archived";
-  verified_rule_count: number;
-  constraints: CreditConstraint[];
 }
 
 export interface Programme {
@@ -232,32 +131,92 @@ export interface Programme {
   status: "active" | "inactive";
   created_at: string;
   updated_at: string;
-  applicable_regulations: ProgrammeRegulation[];
 }
 
-export interface CreditValidationCheck {
-  kind: CreditConstraintKind | null;
-  passed: boolean;
-  actual: string | null;
-  expected: string;
-  message: string;
-  rule_id: string | null;
-  document_id: string | null;
-  document_title: string | null;
+export interface RegulatoryDocument {
+  id: string;
+  title: string;
+  issuing_authority: string;
+  year: number | null;
+  version: string;
+  programme_level: "ug" | "pg" | null;
+  applies_to_all_levels: boolean;
+  original_filename: string;
+  page_count: number;
+  status: string;
+  created_at: string;
+  rule_count: number;
+  courses_imported: number;
+}
+
+export interface RegulatoryRule {
+  id: string;
+  document_id: string;
+  document_title: string;
+  issuing_authority: string;
+  year: number | null;
+  version: string;
+  programme_level: "ug" | "pg" | null;
   clause: string | null;
   page_number: number | null;
-  version: string | null;
+  text: string;
+  rule_type: "category_min" | "category_max" | "category_total" | "semester_min" | "semester_max" | "semester_total" | "total_min" | "total_max" | "other" | null;
+  category: string | null;
+  semester: number | null;
+  value: string | null;
+  status: "applied" | "informational" | "ignored";
+  verified_at: string | null;
 }
 
-export interface CreditValidation {
+export interface CreditTableSource {
+  rule_id: string | null;
+  document_id: string | null;
+  rule_text: string | null;
+  page_number: number | null;
+  manual: boolean;
+  override_id?: string | null;
+}
+
+export interface CreditTableRow {
+  scope_type: "category" | "semester" | "total";
+  category: string | null;
+  semester: number | null;
+  programme_level: "ug" | "pg";
+  programme_duration_years?: number | null;
+  credit_value?: string | null;
+  minimum: string | null;
+  maximum: string | null;
+  total: string | null;
+  minimum_source: CreditTableSource | null;
+  maximum_source: CreditTableSource | null;
+  total_source: CreditTableSource | null;
+}
+
+export interface Course {
   id: string;
-  programme_id: string;
-  semester_credits: string[];
+  course_code: string;
+  name: string;
+  category: string;
+  semester: number;
+  lecture_hours: string;
+  tutorial_hours: string;
+  practical_hours: string;
+  credits: string;
+  status: "active" | "archived";
+}
+
+export interface CourseCreditCategory {
+  category: string;
+  used_credits: string;
+  minimum: string | null;
+  maximum: string | null;
+  status: "not_configured" | "within_limit" | "outside_limit";
+}
+
+export interface CourseCreditSummary {
+  programme_level: "ug" | "pg";
+  categories: CourseCreditCategory[];
   total_credits: string;
-  status: "passed" | "failed" | "incomplete";
-  configured_constraint_count: number;
-  checks: CreditValidationCheck[];
-  created_at: string;
 }
 
 export interface CurriculumOutcome {
@@ -315,23 +274,7 @@ export interface CurriculumDraftContent {
   semesters: CurriculumSemester[];
   co_po_mapping: CurriculumOutcomeMapping[];
   co_pso_mapping: CurriculumOutcomeMapping[];
-  regulatory_references: { rule_id: string; application: string }[];
   credit_distribution: SemesterCreditDistribution[];
-}
-
-export interface CurriculumRegulatoryEvidence {
-  rule_id: string;
-  document_id: string;
-  title: string;
-  category: RegulatoryDocument["category"];
-  issuing_authority: string;
-  version: string;
-  effective_date: string | null;
-  applicability: string;
-  clause: string | null;
-  page_number: number | null;
-  text: string;
-  application: string;
 }
 
 export interface CurriculumGeneration {
@@ -340,9 +283,6 @@ export interface CurriculumGeneration {
   status: "generating" | "completed" | "failed";
   model: string;
   curriculum: CurriculumDraftContent | null;
-  regulatory_references: CurriculumRegulatoryEvidence[];
-  validation_status: "passed" | "failed" | "incomplete" | null;
-  validation_checks: CreditValidationCheck[];
   failure_reason: string | null;
   created_at: string;
   updated_at: string;
@@ -352,9 +292,6 @@ export interface CurriculumVersion {
   id: string;
   version_number: number;
   content: CurriculumDraftContent;
-  regulatory_references: CurriculumRegulatoryEvidence[];
-  validation_status: "passed" | "failed" | "incomplete";
-  validation_checks: CreditValidationCheck[];
   created_at: string;
 }
 
@@ -389,7 +326,6 @@ export interface ReviewerAssignment {
   status: string;
   deadline: string | null;
   published_at: string;
-  validation_status: "passed" | "failed" | "incomplete";
 }
 
 export interface CurriculumNotification {
@@ -454,8 +390,6 @@ export interface ReviewHistoryEntry {
 export interface ReviewerReviewData {
   assignment: ReviewerAssignment;
   curriculum_content: CurriculumDraftContent;
-  regulatory_references: CurriculumRegulatoryEvidence[];
-  validation_checks: CreditValidationCheck[];
   comments: ReviewComment[];
   documents: ReviewDocument[];
   history: ReviewHistoryEntry[];

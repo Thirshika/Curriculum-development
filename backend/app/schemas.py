@@ -267,63 +267,19 @@ class CollegeResponse(BaseModel):
     created_at: datetime
 
 
-class CourseCreate(BaseModel):
-    course_code: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-    name: str = Field(min_length=2, max_length=200)
-    category: str = Field(min_length=2, max_length=100)
-    course_type: str = Field(default="theory", min_length=2, max_length=80)
-    description: str = Field(default="", max_length=4000)
-    objectives: list[str] = Field(default_factory=list, max_length=30)
-    credits: Decimal = Field(gt=0, le=Decimal("1000"), max_digits=8, decimal_places=2)
-    lecture_hours: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1000"), max_digits=6, decimal_places=2)
-    tutorial_hours: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1000"), max_digits=6, decimal_places=2)
-    practical_hours: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1000"), max_digits=6, decimal_places=2)
-    prerequisites: list[str] = Field(default_factory=list, max_length=30)
-    programme_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
-
-    @field_validator("course_code")
-    @classmethod
-    def normalize_course_code(cls, value: str) -> str:
-        return value.upper()
-
-
-class CourseUpdate(BaseModel):
+class CurriculumStructureCourse(BaseModel):
+    course_id: uuid.UUID | None = None
+    course_code: str | None = Field(default=None, min_length=2, max_length=32)
     name: str | None = Field(default=None, min_length=2, max_length=200)
     category: str | None = Field(default=None, min_length=2, max_length=100)
     course_type: str | None = Field(default=None, min_length=2, max_length=80)
-    description: str | None = Field(default=None, max_length=4000)
-    objectives: list[str] | None = Field(default=None, max_length=30)
-    credits: Decimal | None = Field(default=None, gt=0, le=Decimal("1000"), max_digits=8, decimal_places=2)
-    lecture_hours: Decimal | None = Field(default=None, ge=0, le=Decimal("1000"), max_digits=6, decimal_places=2)
-    tutorial_hours: Decimal | None = Field(default=None, ge=0, le=Decimal("1000"), max_digits=6, decimal_places=2)
-    practical_hours: Decimal | None = Field(default=None, ge=0, le=Decimal("1000"), max_digits=6, decimal_places=2)
-    prerequisites: list[str] | None = Field(default=None, max_length=30)
-    programme_ids: list[uuid.UUID] | None = Field(default=None, max_length=100)
-    status: str | None = Field(default=None, pattern=r"^(active|archived)$")
-
-
-class CourseResponse(BaseModel):
-    id: uuid.UUID
-    course_code: str
-    name: str
-    category: str
-    course_type: str
-    description: str
-    objectives: list[str]
-    credits: Decimal
-    lecture_hours: Decimal
-    tutorial_hours: Decimal
-    practical_hours: Decimal
-    prerequisites: list[str]
-    programme_ids: list[str]
-    status: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class CurriculumStructureCourse(BaseModel):
-    course_id: uuid.UUID
     credits: Decimal = Field(gt=0, le=Decimal("1000"), max_digits=8, decimal_places=2)
+
+    @model_validator(mode="after")
+    def require_manual_course_details(self):
+        if self.course_id is None and not all((self.course_code, self.name, self.category, self.course_type)):
+            raise ValueError("Provide course details when no legacy course reference is available.")
+        return self
 
 
 class CurriculumStructureSemester(BaseModel):
@@ -350,7 +306,6 @@ class CurriculumStructureVersionResponse(BaseModel):
     id: uuid.UUID
     version_number: int
     content: CurriculumStructureContent
-    validation: dict | None
     created_at: datetime
 
 
@@ -423,133 +378,6 @@ class TemporaryPasswordResponse(BaseModel):
     temporary_password: str
 
 
-class RegulatoryCategoryValue(str, Enum):
-    UGC = "ugc"
-    NEP_2020 = "nep_2020"
-    NCRF = "ncrf"
-    NHEQF = "nheqf"
-    UNIVERSITY = "university"
-    OTHER = "other"
-
-
-class RegulatoryDocumentResponse(BaseModel):
-    id: uuid.UUID
-    title: str
-    category: RegulatoryCategoryValue
-    issuing_authority: str
-    version: str
-    effective_date: date | None
-    applicability: str
-    university_id: uuid.UUID | None
-    university_name: str | None = None
-    original_filename: str
-    mime_type: str
-    file_size: int
-    page_count: int
-    chunk_count: int
-    status: str
-    extraction_warnings: list[str]
-    pending_rules: int
-    verified_rules: int
-    rejected_rules: int
-    created_at: datetime
-    archived_at: datetime | None
-
-
-class RegulatoryTextResponse(BaseModel):
-    document_id: uuid.UUID
-    title: str
-    extracted_text: str
-
-
-class RegulatoryRuleResponse(BaseModel):
-    id: uuid.UUID
-    document_id: uuid.UUID
-    document_title: str
-    category: RegulatoryCategoryValue
-    issuing_authority: str
-    version: str
-    effective_date: date | None
-    applicability: str
-    clause: str | None
-    page_number: int | None
-    text: str
-    verification_status: str
-    has_conflict: bool
-    conflict_note: str | None
-    verified_by: uuid.UUID | None
-    verified_at: datetime | None
-
-
-class RuleVerificationUpdate(BaseModel):
-    verification_status: str = Field(pattern=r"^(verified|rejected)$")
-
-
-class RuleConflictUpdate(BaseModel):
-    has_conflict: bool
-    conflict_note: str | None = Field(default=None, max_length=4000)
-
-    @model_validator(mode="after")
-    def require_conflict_note(self):
-        if self.has_conflict and not (self.conflict_note or "").strip():
-            raise ValueError("Provide a note describing the potential regulatory conflict")
-        return self
-
-
-class RegulatorySearchRequest(BaseModel):
-    query: str = Field(min_length=2, max_length=2000)
-    categories: list[RegulatoryCategoryValue] | None = None
-    top_k: int = Field(default=8, ge=1, le=25)
-
-
-class RegulatorySearchResult(BaseModel):
-    rule_id: uuid.UUID
-    document_id: uuid.UUID
-    title: str
-    category: RegulatoryCategoryValue
-    issuing_authority: str
-    version: str
-    effective_date: date | None
-    applicability: str
-    clause: str | None
-    page_number: int | None
-    text: str
-    similarity: float
-    has_conflict: bool
-
-
-class CreditConstraintKindValue(str, Enum):
-    MIN_TOTAL_CREDITS = "min_total_credits"
-    MAX_TOTAL_CREDITS = "max_total_credits"
-    MIN_SEMESTER_CREDITS = "min_semester_credits"
-    MAX_SEMESTER_CREDITS = "max_semester_credits"
-    MIN_DURATION_YEARS = "min_duration_years"
-    MAX_DURATION_YEARS = "max_duration_years"
-    MIN_SEMESTERS = "min_semesters"
-    MAX_SEMESTERS = "max_semesters"
-
-
-class CreditConstraintUpsert(BaseModel):
-    kind: CreditConstraintKindValue
-    value: Decimal = Field(gt=0, le=Decimal("100000"), max_digits=8, decimal_places=2)
-
-
-class CreditConstraintResponse(BaseModel):
-    id: uuid.UUID
-    rule_id: uuid.UUID
-    kind: CreditConstraintKindValue
-    value: Decimal
-    rule_text: str
-    clause: str | None
-    page_number: int | None
-    document_id: uuid.UUID
-    document_title: str
-    document_category: RegulatoryCategoryValue
-    document_version: str
-    effective_date: date | None
-    applicability: str
-
-
 class ProgrammeLevelValue(str, Enum):
     UG = "ug"
     PG = "pg"
@@ -575,8 +403,6 @@ class ProgrammeCreate(BaseModel):
     semester_count: int = Field(ge=1, le=24)
     academic_year: str = Field(pattern=r"^20\d{2}-20\d{2}$", min_length=9, max_length=9)
     qualification_level: str | None = Field(default=None, max_length=100)
-    regulatory_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
-
     @field_validator("name", "degree_type", "specialization", "qualification_level", mode="before")
     @classmethod
     def strip_programme_text(cls, value: str | None) -> str | None:
@@ -602,8 +428,6 @@ class ProgrammeUpdate(BaseModel):
     academic_year: str | None = Field(default=None, pattern=r"^20\d{2}-20\d{2}$", min_length=9, max_length=9)
     qualification_level: str | None = Field(default=None, max_length=100)
     status: ProgrammeStatusValue | None = None
-    regulatory_document_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
-
     @field_validator("name", "degree_type", "specialization", "qualification_level", mode="before")
     @classmethod
     def strip_programme_text(cls, value: str | None) -> str | None:
@@ -617,19 +441,6 @@ class ProgrammeUpdate(BaseModel):
             if end != start + 1:
                 raise ValueError("Academic year must span consecutive years")
         return value
-
-
-class ProgrammeRegulatoryResponse(BaseModel):
-    document_id: uuid.UUID
-    title: str
-    category: RegulatoryCategoryValue
-    issuing_authority: str
-    version: str
-    effective_date: date | None
-    applicability: str
-    status: str
-    verified_rule_count: int
-    constraints: list[CreditConstraintResponse]
 
 
 class ProgrammeResponse(BaseModel):
@@ -650,45 +461,172 @@ class ProgrammeResponse(BaseModel):
     status: ProgrammeStatusValue
     created_at: datetime
     updated_at: datetime
-    applicable_regulations: list[ProgrammeRegulatoryResponse]
 
 
-class CreditValidationRequest(BaseModel):
-    semester_credits: list[Decimal] = Field(min_length=1, max_length=24)
+class RegulatoryDocumentResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    issuing_authority: str
+    year: int | None
+    version: str
+    programme_level: str | None
+    applies_to_all_levels: bool = False
+    original_filename: str
+    page_count: int
+    status: str
+    created_at: datetime
+    rule_count: int
+    courses_imported: int = 0
 
-    @field_validator("semester_credits")
-    @classmethod
-    def validate_semester_credits(cls, values: list[Decimal]) -> list[Decimal]:
-        if any(value < 0 or value > Decimal("10000") for value in values):
-            raise ValueError("Semester credits must be between 0 and 10,000")
-        return values
 
-
-class CreditCheckResult(BaseModel):
-    kind: CreditConstraintKindValue | None
-    passed: bool
-    actual: Decimal | None
-    expected: str
-    message: str
-    rule_id: uuid.UUID | None
-    document_id: uuid.UUID | None
-    document_title: str | None
+class RegulatoryRuleResponse(BaseModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    document_title: str
+    issuing_authority: str
+    year: int | None
+    version: str
+    programme_level: str | None
     clause: str | None
     page_number: int | None
-    version: str | None
-
-
-class CreditValidationResponse(BaseModel):
-    id: uuid.UUID
-    programme_id: uuid.UUID
-    semester_credits: list[Decimal]
-    total_credits: Decimal
+    text: str
+    rule_type: str | None
+    category: str | None
+    semester: int | None
+    value: Decimal | None
     status: str
-    configured_constraint_count: int
-    checks: list[CreditCheckResult]
-    created_at: datetime
+    verified_at: datetime | None
 
 
+class RegulatoryRuleUpdate(BaseModel):
+    text: str = Field(min_length=4, max_length=4000)
+    rule_type: str = Field(pattern=r"^(category_min|category_max|category_total|semester_min|semester_max|semester_total|total_min|total_max|other)$")
+    category: str | None = Field(default=None, min_length=2, max_length=100)
+    semester: int | None = Field(default=None, ge=1, le=24)
+    value: Decimal | None = Field(default=None, ge=0, le=100000, max_digits=10, decimal_places=2)
+
+    @model_validator(mode="after")
+    def validate_rule_scope(self):
+        if self.rule_type.startswith("category_") and not self.category:
+            raise ValueError("Category limits require a category.")
+        if self.rule_type.startswith("semester_") and self.semester is None:
+            raise ValueError("Semester limits require a semester number.")
+        if self.rule_type != "other" and self.value is None:
+            raise ValueError("Credit rules require a numeric value.")
+        return self
+
+
+class RegulatoryRuleDecision(BaseModel):
+    status: str = Field(pattern=r"^(approved|rejected)$")
+
+
+class CreditTableSource(BaseModel):
+    rule_id: uuid.UUID | None
+    document_id: uuid.UUID | None
+    rule_text: str | None
+    page_number: int | None
+    manual: bool
+    override_id: uuid.UUID | None = None
+
+
+class CreditTableRow(BaseModel):
+    scope_type: str
+    category: str | None
+    semester: int | None
+    programme_level: str
+    programme_duration_years: int | None = None
+    credit_value: str | None = None
+    minimum: Decimal | None
+    maximum: Decimal | None
+    total: Decimal | None
+    minimum_source: CreditTableSource | None
+    maximum_source: CreditTableSource | None
+    total_source: CreditTableSource | None
+
+
+class CreditTableResponse(BaseModel):
+    programme_level: str
+    rows: list[CreditTableRow]
+
+
+class CreditTableOverrideCreate(BaseModel):
+    programme_level: str = Field(pattern=r"^(ug|pg)$")
+    scope_type: str = Field(pattern=r"^(category|semester|total)$")
+    category: str | None = Field(default=None, min_length=2, max_length=100)
+    semester: int | None = Field(default=None, ge=1, le=24)
+    limit_type: str = Field(pattern=r"^(minimum|maximum|total)$")
+    value: Decimal = Field(ge=0, le=100000, max_digits=10, decimal_places=2)
+
+    @model_validator(mode="after")
+    def validate_override_scope(self):
+        if self.scope_type == "category" and not self.category:
+            raise ValueError("Category limits require a category.")
+        if self.scope_type == "semester" and self.semester is None:
+            raise ValueError("Semester limits require a semester.")
+        if self.scope_type == "total" and self.limit_type not in {"minimum", "maximum"}:
+            raise ValueError("Programme total limits must be minimum or maximum.")
+        if self.scope_type == "category" and self.limit_type == "total":
+            raise ValueError("Category limits must be minimum or maximum.")
+        return self
+
+
+class CourseCreate(BaseModel):
+    course_code: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    name: str = Field(min_length=2, max_length=200)
+    category: str = Field(min_length=2, max_length=100)
+    semester: int = Field(ge=1, le=24)
+    lecture_hours: Decimal = Field(default=Decimal("0"), ge=0, le=1000, max_digits=6, decimal_places=2)
+    tutorial_hours: Decimal = Field(default=Decimal("0"), ge=0, le=1000, max_digits=6, decimal_places=2)
+    practical_hours: Decimal = Field(default=Decimal("0"), ge=0, le=1000, max_digits=6, decimal_places=2)
+    credits: Decimal = Field(gt=0, le=1000, max_digits=8, decimal_places=2)
+
+    @field_validator("course_code")
+    @classmethod
+    def normalize_course_code(cls, value: str) -> str:
+        return value.upper()
+
+
+class CourseUpdate(BaseModel):
+    course_code: str | None = Field(default=None, min_length=2, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    name: str | None = Field(default=None, min_length=2, max_length=200)
+    category: str | None = Field(default=None, min_length=2, max_length=100)
+    semester: int | None = Field(default=None, ge=1, le=24)
+    lecture_hours: Decimal | None = Field(default=None, ge=0, le=1000, max_digits=6, decimal_places=2)
+    tutorial_hours: Decimal | None = Field(default=None, ge=0, le=1000, max_digits=6, decimal_places=2)
+    practical_hours: Decimal | None = Field(default=None, ge=0, le=1000, max_digits=6, decimal_places=2)
+    credits: Decimal | None = Field(default=None, gt=0, le=1000, max_digits=8, decimal_places=2)
+
+
+class CourseResponse(BaseModel):
+    id: uuid.UUID
+    course_code: str
+    name: str
+    category: str
+    semester: int
+    lecture_hours: Decimal
+    tutorial_hours: Decimal
+    practical_hours: Decimal
+    credits: Decimal
+    status: str
+
+
+class CourseCategorySummary(BaseModel):
+    category: str
+    used_credits: Decimal
+    minimum: Decimal | None
+    maximum: Decimal | None
+    status: str
+
+
+class CourseCreditSummary(BaseModel):
+    programme_level: str
+    categories: list[CourseCategorySummary]
+    total_credits: Decimal
+
+
+class CourseImportResponse(BaseModel):
+    imported: int
+    errors: list[str]
 class StructuredSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -735,11 +673,6 @@ class CurriculumOutcomeMapping(StructuredSchema):
     programme_outcome_codes: list[str] = Field(min_length=1, max_length=24)
 
 
-class GeneratedRegulatoryReference(StructuredSchema):
-    rule_id: str = Field(min_length=36, max_length=36)
-    application: str = Field(min_length=10, max_length=1000)
-
-
 class GeneratedCurriculumContent(StructuredSchema):
     programme_overview: str = Field(min_length=20, max_length=4000)
     programme_educational_objectives: list[str] = Field(min_length=1, max_length=20)
@@ -748,8 +681,6 @@ class GeneratedCurriculumContent(StructuredSchema):
     semesters: list[CurriculumSemester] = Field(min_length=1, max_length=24)
     co_po_mapping: list[CurriculumOutcomeMapping] = Field(min_length=1, max_length=500)
     co_pso_mapping: list[CurriculumOutcomeMapping] = Field(min_length=1, max_length=500)
-    regulatory_references: list[GeneratedRegulatoryReference] = Field(min_length=1, max_length=25)
-
 
 class SemesterCreditDistribution(StructuredSchema):
     semester_number: int = Field(ge=1, le=24)
@@ -757,22 +688,9 @@ class SemesterCreditDistribution(StructuredSchema):
 
 
 class CurriculumDraftContent(GeneratedCurriculumContent):
+    model_config = ConfigDict(extra="ignore")
+
     credit_distribution: list[SemesterCreditDistribution] = Field(min_length=1, max_length=24)
-
-
-class CurriculumRegulatoryEvidence(StructuredSchema):
-    rule_id: uuid.UUID
-    document_id: uuid.UUID
-    title: str
-    category: RegulatoryCategoryValue
-    issuing_authority: str
-    version: str
-    effective_date: date | None
-    applicability: str
-    clause: str | None
-    page_number: int | None
-    text: str
-    application: str
 
 
 class CurriculumGenerationResponse(BaseModel):
@@ -781,9 +699,6 @@ class CurriculumGenerationResponse(BaseModel):
     status: str
     model: str
     curriculum: CurriculumDraftContent | None
-    regulatory_references: list[CurriculumRegulatoryEvidence]
-    validation_status: str | None
-    validation_checks: list[CreditCheckResult]
     failure_reason: str | None
     created_at: datetime
     updated_at: datetime
@@ -809,9 +724,6 @@ class CurriculumVersionResponse(BaseModel):
     id: uuid.UUID
     version_number: int
     content: CurriculumDraftContent
-    regulatory_references: list[CurriculumRegulatoryEvidence]
-    validation_status: str
-    validation_checks: list[CreditCheckResult]
     created_at: datetime
 
 
@@ -846,7 +758,6 @@ class CurriculumAssignmentResponse(BaseModel):
     status: str
     deadline: date | None
     published_at: datetime
-    validation_status: str
 
 
 class PublishResult(BaseModel):
@@ -992,8 +903,6 @@ class ReviewHistoryResponse(BaseModel):
 class ReviewerReviewResponse(BaseModel):
     assignment: CurriculumAssignmentResponse
     curriculum_content: dict
-    regulatory_references: list[CurriculumRegulatoryEvidence]
-    validation_checks: list[CreditCheckResult]
     comments: list[ReviewCommentResponse]
     documents: list[ReviewDocumentResponse]
     history: list[ReviewHistoryResponse]

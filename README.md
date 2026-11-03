@@ -12,25 +12,22 @@ Phase 1–8 implementation of the AI-Powered Curriculum Design & University Revi
 - Bootstrap accounts are optional environment settings. Admins and reviewers use separate sign-in pages at `/login/admin` and `/login/reviewer`; reviewers can register against an existing university/college or request a new university account.
 - Admin university management with search, pagination, profile editing, status changes, and reviewer assignment visibility.
 - Admin reviewer management with one reviewer per university, university-code login usernames, generated one-time passwords, forced password changes, password reset, and account activation controls. Public reviewer signups remain inactive until an administrator activates them; new university signups require activating both the university and reviewer.
-- Regulatory PDF/DOCX intake, text and table extraction, local 384-dimensional feature-hashing embeddings, searchable chunks, candidate-rule extraction, verification, conflict flags, version history, and archival.
-- Regulatory retrieval is restricted to verified rules from active documents; regulatory uploads do not train an AI model and are not sent to an external embedding service.
-- Feature-hashing retrieval is lexical rather than a semantic language model; extracted rules are heuristic candidates and require an administrator to verify their source and meaning.
-- Admin programme management is university-scoped and includes duration, semester count, level, qualification label, academic year, and applicable source documents.
-- Deterministic credit validation evaluates only numeric thresholds explicitly configured against verified, unconflicted rules from active source versions, and stores each validation with the relevant regulatory evidence.
-- Supported configured checks are minimum/maximum total credits, minimum/maximum credits per semester, minimum/maximum programme duration, and minimum/maximum semester count. If no applicable checks are configured, validation is `incomplete`; a `passed` result means only that the configured checks passed, not that the programme is fully compliant.
-- Admins can generate and edit structured curriculum drafts using the OpenAI API and retrieved rules from active, programme-mapped sources that are verified and not conflict-flagged. Generated course-credit distributions are computed and checked by the deterministic engine; citations are validated against the retrieved source rules. Draft generation does not approve or publish a curriculum.
-- Curriculum generation sends programme details and retrieved regulatory excerpts to OpenAI. Configure `OPENAI_API_KEY` on the backend; `OPENAI_MODEL` defaults to `gpt-4o-mini`. The API key must never be placed in frontend configuration.
-- Completed generated drafts can be saved into a searchable curriculum library. Edits create immutable version snapshots; each version keeps its source citations and deterministic validation result and can be exported to DOCX or PDF.
-- Admins can publish a selected version to the active reviewer assigned to that programme's university, optionally with a deadline. Publishing a failed credit-validation version is blocked; an incomplete result is published with an explicit warning. Reviewer assignment listing and document downloads are scoped to the authenticated reviewer and university.
+- Admin programme management is university-scoped and includes duration, semester count, level, qualification label, and academic year.
+- The Regulatory Knowledge Base accepts regulation PDFs, immediately applies detected complete credit rules, extracts duration-specific undergraduate category values from supported minimum-credit tables, and uses the newest uploaded document with a recognized table for the selected degree duration. It also imports complete course rows from tables when title, category, semester, L–T–P, and credits are present. Existing course codes are preserved; stable codes are generated when omitted. Incomplete course details are not invented.
+- The Credit Table switches between 3-year and 4-year degree values. Maximum credits are entered manually for each broad course category.
+- The Course Library supports course CRUD, CSV import, and automatically imported courses from supported regulatory PDF tables. Removing a source regulation also removes courses imported from it.
+- Curriculum structures support manually entered course descriptions and credit values; they remain separate from regulatory credit-limit extraction.
+- Admins can generate and edit structured curriculum drafts using the OpenAI API. Draft generation does not approve or publish a curriculum.
+- Curriculum generation sends programme details to OpenAI. Configure `OPENAI_API_KEY` on the backend; `OPENAI_MODEL` defaults to `gpt-4o-mini`. The API key must never be placed in frontend configuration.
+- Completed generated drafts can be saved into a searchable curriculum library. Edits create immutable version snapshots and can be exported to DOCX or PDF.
+- Admins can publish a selected version to the active reviewer assigned to that programme's university, optionally with a deadline. Reviewer assignment listing and document downloads are scoped to the authenticated reviewer and university.
 - Reviewers can open their assigned version, save/submit section-level comments with priorities, upload validated PDF/DOCX corrections, request revisions, recommend approval, or reject with a reason. Decisions and review actions are recorded against the immutable assigned version.
 - Administrators can view reviewer assignments and submitted comments, reply, resolve or reopen individual comments, upload revised PDF/DOCX attachments to the current published version, download review attachments, and follow notifications. The feedback screen refreshes from the API every 15 seconds.
 - Curriculum content edits create new immutable versions. Administrators can compare version content field-by-field and publish a revised version as a new reviewer assignment; prior assignments, documents, comments, and history remain linked to the earlier version.
 - A reviewer can recommend approval or reject with a reason, but cannot grant final approval. Only an authenticated administrator can record the final approval/rejection; final approval is blocked while submitted reviewer comments remain unresolved.
 - Review attachments are stored privately outside frontend assets, have randomized storage keys and SHA-256 digests, are validated as readable PDF or DOCX files, and are downloadable only by an administrator or the assigned reviewer.
 
-Phase 9 security hardening, deployment configuration, and final end-to-end testing remain.
-
-The supplementary specification introduces additional modules beyond the original nine-phase baseline. These are not yet implemented: college-level organization and reviewer isolation, a reusable course catalogue and manual curriculum designer, the richer category/compliance checklist validators, dedicated role-selection/forgot-password screens, reviewer profile editing, and analytics/report exports. These will be added without replacing the existing university-level workflows; college-level reviewer scoping needs its own additive schema migration and end-to-end isolation tests.
+Historical database tables, Alembic migrations, and stored data are retained. The rebuilt regulatory, credit-table, and course catalogue workflows use the existing records where applicable and add new schema through migration `0020_regulatory_credit_duration`.
 
 ## Local development
 
@@ -50,7 +47,7 @@ uvicorn app.main:app --reload
 
 Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` to seed the first administrator on startup. To create a local reviewer for dashboard development, also set `REVIEWER_EMAIL`, `REVIEWER_PASSWORD`, `REVIEWER_NAME`, `REVIEWER_UNIVERSITY_NAME`, and `REVIEWER_UNIVERSITY_CODE`. The seeded reviewer is required to change their password at first sign-in. Use unique, strong passwords and a generated `SECRET_KEY`; the example values are for local development only.
 
-Set `OPENAI_API_KEY` in `backend/.env` to enable AI curriculum generation. Programme descriptions and selected verified regulatory excerpts are sent to the configured OpenAI model for generation.
+Set `OPENAI_API_KEY` in `backend/.env` to enable AI curriculum generation. Programme details are sent to the configured OpenAI model for generation.
 
 Run the backend authentication and role-isolation checks with `python -m pip install -r requirements-dev.txt` followed by `python -m pytest`.
 
@@ -85,29 +82,26 @@ Open `http://localhost:5173`. Vite proxies `/api` requests to the local FastAPI 
 - Reviewers can sign in using their email address or their assigned university code as username.
 - `PATCH /api/reviewers/{id}` — update reviewer name/email or activation.
 - `POST /api/reviewers/{id}/reset-password` — generate a new one-time password, force a password change, and revoke prior refresh sessions.
-- `POST /api/regulations` — privately upload a PDF/DOCX, extract text and tables, create searchable chunks and candidate rules.
-- `GET /api/regulations` — search and filter regulatory source versions.
-- `GET /api/regulations/{id}/text` and `GET /api/regulations/{id}/download` — admin-protected extracted-text preview and source download.
-- `POST /api/regulations/{id}/archive` — archive a source; archived rules are excluded from retrieval.
-- `GET /api/regulatory-rules` — filter extracted rules by source, verification status, and conflict state.
-- `PATCH /api/regulatory-rules/{id}/verification` — verify or reject an extracted rule with an admin audit identity and timestamp.
-- `PATCH /api/regulatory-rules/{id}/conflict` — flag or clear a potential conflict; flagged rules are excluded from retrieval.
-- `POST /api/regulatory-rules/retrieve` — retrieve the best-matching, verified, unconflicted rules from active sources.
-- `PUT /api/regulatory-rules/{id}/credit-constraint` — configure one supported numeric credit/duration/semester threshold explicitly from a verified, unconflicted rule.
-- `GET /api/regulatory-rules/credit-constraints` — list currently applicable configured numeric thresholds.
-- `GET /api/programmes` — list programmes with search, university filter, pagination, status, and mapped source metadata.
-- `POST /api/programmes` — create a programme and map active, university-applicable regulatory source documents.
-- `PATCH /api/programmes/{id}` — edit programme structure, status, or applicable sources.
-- `POST /api/programmes/{id}/validate-credits` — calculate the credit total and evaluate applicable configured constraints, persisting an evidence-backed validation run.
-- `GET /api/programmes/{id}/validations` — retrieve paginated credit-validation history.
-- `POST /api/ai-generation/programmes/{id}` — retrieve applicable verified rules, generate a structured curriculum draft with OpenAI, validate its citations and shape, and deterministically check its semester credit distribution.
+- `GET /api/programmes` — list programmes with search, university filter, pagination, and status.
+- `POST /api/programmes` — create a programme.
+- `PATCH /api/programmes/{id}` — edit programme structure or status.
+- `POST /api/regulations` and `GET /api/regulations` — upload a regulation PDF with metadata and search/list stored regulations.
+- `GET /api/regulations/{id}/download` — download an uploaded regulation PDF.
+- `GET /api/regulatory-rules` and `PATCH /api/regulatory-rules/{id}` — search, list, and edit extracted credit-rule drafts.
+- `GET /api/credit-table?programme_level=ug|pg` — derive effective limits from extracted credit rules and their rule or manual-override source.
+- `PUT /api/credit-table/overrides` and `DELETE /api/credit-table/overrides/{id}` — set or remove a manual credit-limit override.
+- `GET /api/courses` and `POST /api/courses` — search and create catalogue courses.
+- `PATCH /api/courses/{id}` and `DELETE /api/courses/{id}` — update or delete a course.
+- `POST /api/courses/import` — validate and import a CSV course catalogue.
+- `GET /api/courses/summary?programme_level=ug|pg` — compare used category credits with effective limits.
+- `POST /api/ai-generation/programmes/{id}` — generate a structured curriculum draft with OpenAI.
 - `GET /api/ai-generation/programmes/{id}` — list generation history for a programme.
-- `GET /api/ai-generation/{job_id}` — retrieve a generation job and its draft/evidence.
-- `PATCH /api/ai-generation/{job_id}` — edit and save a generated draft; recalculates semester credits and configured regulatory checks.
+- `GET /api/ai-generation/{job_id}` — retrieve a generation job and its draft.
+- `PATCH /api/ai-generation/{job_id}` — edit and save a generated draft.
 - `POST /api/curricula` — add a completed generation draft to the central library.
 - `GET /api/curricula` — search/filter and sort library entries by programme, university, status, or title.
 - `GET /api/curricula/{id}` and `GET /api/curricula/{id}/versions` — retrieve the library item and immutable version history.
-- `PATCH /api/curricula/{id}` — update its title or save edited curriculum content as a new validated version.
+- `PATCH /api/curricula/{id}` — update its title or save edited curriculum content as a new version.
 - `POST /api/curricula/{id}/archive` — archive a library item; existing reviewer assignments stay linked to their published version.
 - `GET /api/curricula/{id}/versions/{version}/export?format=docx|pdf` — download an authenticated Word or PDF export for a selected version.
 - `POST /api/curricula/{id}/publish` — publish a version to an active assigned university reviewer with an optional deadline.
@@ -127,11 +121,11 @@ Open `http://localhost:5173`. Vite proxies `/api` requests to the local FastAPI 
 - `POST /api/reviews/comments/{id}/replies` and `PATCH /api/reviews/comments/{id}/status` — administrator reply, resolve, or reopen a submitted comment.
 - `GET /api/reviews/curricula/{id}/compare?from_version={n}&to_version={n}` — compare saved curriculum versions.
 
-Review workflow tables (`review_comments`, `comment_replies`, `review_documents`, and `review_history`) are created by Alembic migration `0009_review_workflow`. Configure `REVIEW_STORAGE_DIR` and `REVIEW_MAX_UPLOAD_BYTES` to control private review attachment storage and limits.
+Review workflow tables (`review_comments`, `comment_replies`, `review_documents`, and `review_history`) are created by Alembic migration `0009_review_workflow`. Configure `REVIEW_STORAGE_DIR` and `REVIEW_MAX_UPLOAD_BYTES` to control private review attachment storage and limits. Configure `REGULATORY_STORAGE_DIR` and `REGULATORY_MAX_UPLOAD_BYTES` for uploaded regulation PDFs.
 
 ## Database tables
 
-`users`, `universities`, `refresh_sessions` (hashed, revocable refresh credentials), `regulatory_documents`, `regulatory_chunks`, `regulatory_rules`, `credit_constraints`, `programmes`, `programme_regulatory_mappings`, `credit_validation_runs`, `generation_jobs` (structured curriculum drafts), `curricula`, `curriculum_versions` (immutable snapshots with evidence and validation), `curriculum_assignments` (reviewer-scoped publication records), and `notifications` (in-app assignment notices). Alembic migrations are in `backend/migrations/versions/`. PostgreSQL stores 384-dimensional vectors in pgvector; SQLite uses JSON vectors for local development. Uploaded source files live under `REGULATORY_STORAGE_DIR`, outside public frontend assets.
+Runtime tables include `users`, `universities`, `refresh_sessions`, `programmes`, `generation_jobs`, `curricula`, `curriculum_versions`, `curriculum_assignments`, `notifications`, regulatory documents and rules, courses, and credit-table overrides. Alembic migrations are in `backend/migrations/`.
 
 ## Planned remaining phases
 

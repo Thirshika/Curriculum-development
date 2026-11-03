@@ -26,8 +26,6 @@ class Settings(BaseSettings):
     regulatory_max_upload_bytes: int = 25 * 1024 * 1024
     review_storage_dir: Path = Path("./private_uploads/reviews")
     review_max_upload_bytes: int = 25 * 1024 * 1024
-    regulatory_chunk_size: int = 1200
-    regulatory_chunk_overlap: int = 150
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
 

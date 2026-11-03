@@ -1,528 +1,428 @@
 import hashlib
 import uuid
-from collections import Counter
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from datetime import date, datetime, timezone
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import joinedload
+from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import joinedload, load_only
 
 from app.config import settings
 from app.dependencies import DbSession, require_role
-from app.models import (
-    CreditConstraint,
-    CreditConstraintKind,
-    RegulatoryCategory,
-    RegulatoryChunk,
-    RegulatoryDocument,
-    RegulatoryDocumentStatus,
-    RegulatoryRule,
-    University,
-    UniversityStatus,
-    RuleVerificationStatus,
-    User,
-    UserRole,
-)
-from app.regulatory import (
-    SUPPORTED_MIME_TYPES,
-    candidate_rules,
-    cosine_similarity,
-    extract_document,
-    local_embedding,
-    read_upload,
-    split_pages,
-)
-from app.schemas import (
-    RegulatoryCategoryValue,
-    RegulatoryDocumentResponse,
-    RegulatoryRuleResponse,
-    RegulatorySearchRequest,
-    RegulatorySearchResult,
-    RegulatoryTextResponse,
-    RuleConflictUpdate,
-    RuleVerificationUpdate,
-    CreditConstraintResponse,
-    CreditConstraintUpsert,
-)
+from app.models import Course, RegulatoryCategory, RegulatoryDocument, RegulatoryDocumentStatus, RegulatoryRule, RuleVerificationStatus, User, UserRole
+from app.regulatory import extract_credit_rules, extract_credit_table_rules, extract_courses_from_pdf, extract_pdf_pages
+from app.schemas import RegulatoryDocumentResponse, RegulatoryRuleDecision, RegulatoryRuleResponse, RegulatoryRuleUpdate
 
-router = APIRouter(prefix="/api/regulations", tags=["regulations"])
+router = APIRouter(tags=["regulatory-knowledge"])
+AdminUser = require_role(UserRole.ADMIN)
 rules_router = APIRouter(prefix="/api/regulatory-rules", tags=["regulatory-rules"])
-AdminUser = Annotated[User, Depends(require_role(UserRole.ADMIN))]
 
 
-def document_counts(db, document_id: uuid.UUID) -> Counter:
-    rows = (
-        db.query(RegulatoryRule.verification_status, func.count(RegulatoryRule.id))
-        .filter(RegulatoryRule.document_id == document_id)
-        .group_by(RegulatoryRule.verification_status)
-        .all()
-    )
-    return Counter({status_value.value: count for status_value, count in rows})
+def _is_credit_limit_rule(rule: RegulatoryRule) -> bool:
+    if rule.value is None:
+        return False
+    if rule.rule_type in {"category_min", "category_max", "category_total"}:
+        return bool(rule.category)
+    if rule.rule_type in {"semester_min", "semester_max", "semester_total"}:
+        return rule.semester is not None
+    return rule.rule_type in {"total_min", "total_max"}
 
 
-def document_response(document: RegulatoryDocument, counts: Counter) -> RegulatoryDocumentResponse:
+def document_response(
+    document: RegulatoryDocument,
+    *,
+    rule_count: int | None = None,
+    courses_imported: int = 0,
+) -> RegulatoryDocumentResponse:
     return RegulatoryDocumentResponse(
         id=document.id,
         title=document.title,
-        category=document.category.value,
         issuing_authority=document.issuing_authority,
+        year=document.year,
         version=document.version,
-        effective_date=document.effective_date,
-        applicability=document.applicability,
-        university_id=document.university_id,
-        university_name=document.university.name if document.university else None,
+        programme_level=document.programme_level,
+        applies_to_all_levels=document.applicability.casefold() == "all applicable programmes",
         original_filename=document.original_filename,
-        mime_type=document.mime_type,
-        file_size=document.file_size,
         page_count=document.page_count,
-        chunk_count=document.chunk_count,
         status=document.status.value,
-        extraction_warnings=document.extraction_warnings or [],
-        pending_rules=counts["pending"],
-        verified_rules=counts["verified"],
-        rejected_rules=counts["rejected"],
         created_at=document.created_at,
-        archived_at=document.archived_at,
+        rule_count=rule_count if rule_count is not None else len(document.rules),
+        courses_imported=courses_imported,
     )
 
 
 def rule_response(rule: RegulatoryRule) -> RegulatoryRuleResponse:
     document = rule.document
+    status = (
+        "ignored"
+        if rule.verification_status == RuleVerificationStatus.REJECTED
+        else "applied"
+        if (
+            _is_credit_limit_rule(rule)
+            and (document.programme_level or document.applicability.casefold() == "all applicable programmes")
+            and document.status == RegulatoryDocumentStatus.READY
+        )
+        else "informational"
+    )
     return RegulatoryRuleResponse(
         id=rule.id,
         document_id=document.id,
         document_title=document.title,
-        category=document.category.value,
         issuing_authority=document.issuing_authority,
+        year=document.year,
         version=document.version,
-        effective_date=document.effective_date,
-        applicability=document.applicability,
+        programme_level=document.programme_level,
         clause=rule.clause,
         page_number=rule.page_number,
         text=rule.text,
-        verification_status=rule.verification_status.value,
-        has_conflict=rule.has_conflict,
-        conflict_note=rule.conflict_note,
-        verified_by=rule.verified_by,
+        rule_type=rule.rule_type,
+        category=rule.category,
+        semester=rule.semester,
+        value=rule.value,
+        status=status,
         verified_at=rule.verified_at,
     )
 
 
-@router.get("", response_model=list[RegulatoryDocumentResponse])
+def _rule_load_options():
+    return (
+        load_only(
+            RegulatoryRule.id,
+            RegulatoryRule.document_id,
+            RegulatoryRule.clause,
+            RegulatoryRule.page_number,
+            RegulatoryRule.text,
+            RegulatoryRule.rule_type,
+            RegulatoryRule.category,
+            RegulatoryRule.semester,
+            RegulatoryRule.value,
+            RegulatoryRule.verification_status,
+            RegulatoryRule.verified_at,
+            RegulatoryRule.has_conflict,
+        ),
+        joinedload(RegulatoryRule.document).load_only(
+            RegulatoryDocument.id,
+            RegulatoryDocument.title,
+            RegulatoryDocument.issuing_authority,
+            RegulatoryDocument.year,
+            RegulatoryDocument.version,
+            RegulatoryDocument.programme_level,
+            RegulatoryDocument.status,
+            RegulatoryDocument.applicability,
+        ),
+    )
+
+
+@router.get("/api/regulations", response_model=list[RegulatoryDocumentResponse])
 def list_regulatory_documents(
     db: DbSession,
-    _admin: AdminUser,
+    _admin: User = Depends(AdminUser),
     search: str | None = Query(default=None, max_length=120),
-    category: RegulatoryCategoryValue | None = None,
-    document_status: str | None = Query(default=None, alias="status", pattern="^(ready|archived)$"),
+    issuing_authority: str | None = Query(default=None, max_length=200),
+    year: int | None = Query(default=None, ge=1900, le=2200),
+    programme_level: str | None = Query(default=None, pattern="^(ug|pg)$"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ) -> list[RegulatoryDocumentResponse]:
-    query = db.query(RegulatoryDocument)
+    rule_count = (
+        db.query(func.count(RegulatoryRule.id))
+        .filter(RegulatoryRule.document_id == RegulatoryDocument.id)
+        .correlate(RegulatoryDocument)
+        .scalar_subquery()
+    )
+    query = db.query(RegulatoryDocument, rule_count.label("rule_count")).options(
+        load_only(
+            RegulatoryDocument.id,
+            RegulatoryDocument.title,
+            RegulatoryDocument.issuing_authority,
+            RegulatoryDocument.year,
+            RegulatoryDocument.version,
+            RegulatoryDocument.programme_level,
+            RegulatoryDocument.original_filename,
+            RegulatoryDocument.page_count,
+            RegulatoryDocument.status,
+            RegulatoryDocument.created_at,
+        )
+    )
     if search:
         pattern = f"%{search.strip()}%"
-        query = query.filter(
-            or_(
-                RegulatoryDocument.title.ilike(pattern),
-                RegulatoryDocument.issuing_authority.ilike(pattern),
-                RegulatoryDocument.version.ilike(pattern),
-            )
-        )
-    if category:
-        query = query.filter(RegulatoryDocument.category == RegulatoryCategory(category.value))
-    if document_status:
-        query = query.filter(RegulatoryDocument.status == RegulatoryDocumentStatus(document_status))
+        query = query.filter(or_(RegulatoryDocument.title.ilike(pattern), RegulatoryDocument.issuing_authority.ilike(pattern)))
+    if issuing_authority:
+        query = query.filter(RegulatoryDocument.issuing_authority.ilike(f"%{issuing_authority.strip()}%"))
+    if year is not None:
+        query = query.filter(RegulatoryDocument.year == year)
+    if programme_level:
+        query = query.filter(RegulatoryDocument.programme_level == programme_level)
     documents = query.order_by(RegulatoryDocument.created_at.desc()).offset(offset).limit(limit).all()
-    return [document_response(document, document_counts(db, document.id)) for document in documents]
+    return [
+        document_response(document, rule_count=count)
+        for document, count in documents
+    ]
 
 
-@router.post("", response_model=RegulatoryDocumentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/api/regulations", response_model=RegulatoryDocumentResponse, status_code=201)
 async def upload_regulatory_document(
     db: DbSession,
-    admin: AdminUser,
-    file: Annotated[UploadFile, File()],
-    category: Annotated[RegulatoryCategoryValue, Form()],
-    issuing_authority: Annotated[str, Form(min_length=2, max_length=200)],
-    version: Annotated[str, Form(min_length=1, max_length=80)],
-    applicability: Annotated[str, Form(min_length=2, max_length=500)],
-    title: Annotated[str | None, Form(max_length=240)] = None,
-    effective_date: Annotated[str | None, Form()] = None,
-    university_id: Annotated[uuid.UUID | None, Form()] = None,
+    admin: User = Depends(AdminUser),
+    title: str = Form(min_length=2, max_length=240),
+    issuing_authority: str = Form(min_length=2, max_length=200),
+    year: int = Form(ge=1900, le=2200),
+    version: str = Form(min_length=1, max_length=80),
+    programme_level: str = Form(pattern="^(ug|pg)$"),
+    file: UploadFile = File(...),
 ) -> RegulatoryDocumentResponse:
-    filename = Path(file.filename or "").name
-    suffix = Path(filename).suffix.lower()
-    if suffix not in SUPPORTED_MIME_TYPES:
-        raise HTTPException(status_code=415, detail="Only PDF and DOCX documents are supported")
-    content = await read_upload(file, settings.regulatory_max_upload_bytes)
-    extracted = extract_document(filename, content)
-    cleaned_title = (title or Path(filename).stem).strip()
-    cleaned_authority = issuing_authority.strip()
-    cleaned_version = version.strip()
-    cleaned_applicability = applicability.strip()
-    if len(cleaned_title) < 2 or len(cleaned_authority) < 2 or not cleaned_version or len(cleaned_applicability) < 2:
-        raise HTTPException(status_code=422, detail="Title, authority, version, and applicability must not be blank")
-    if category == RegulatoryCategoryValue.UNIVERSITY and university_id is None:
-        raise HTTPException(status_code=422, detail="Select the university this regulation applies to")
-    if university_id is not None:
-        university = db.get(University, university_id)
-        if university is None:
-            raise HTTPException(status_code=404, detail="University not found")
-        if category != RegulatoryCategoryValue.UNIVERSITY:
-            raise HTTPException(status_code=422, detail="Only university regulations can be scoped to a university")
-        if university.status != UniversityStatus.ACTIVE:
-            raise HTTPException(status_code=409, detail="University-specific regulations require an active university")
+    if not file.filename or file.filename.rsplit(".", 1)[-1].lower() != "pdf":
+        raise HTTPException(status_code=415, detail="Only PDF regulation files are accepted.")
+    content = await file.read(settings.regulatory_max_upload_bytes + 1)
+    if len(content) > settings.regulatory_max_upload_bytes:
+        raise HTTPException(status_code=413, detail="The regulation PDF exceeds the upload size limit.")
+    try:
+        pages = extract_pdf_pages(content)
+        extracted_credit_rules = extract_credit_rules(pages) + extract_credit_table_rules(content)
+        extracted_courses = extract_courses_from_pdf(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    duplicate = db.query(RegulatoryDocument.id).filter(
-        func.lower(RegulatoryDocument.title) == cleaned_title.lower(),
-        RegulatoryDocument.category == RegulatoryCategory(category.value),
-        RegulatoryDocument.version == cleaned_version,
-        RegulatoryDocument.university_id == university_id,
-    ).first()
-    if duplicate:
-        raise HTTPException(status_code=409, detail="This regulatory document version already exists")
-
-    chunks = split_pages(extracted.pages, settings.regulatory_chunk_size, settings.regulatory_chunk_overlap)
-    if not chunks:
-        raise HTTPException(status_code=422, detail="No searchable text could be extracted from the document")
-    candidates = candidate_rules(extracted.pages)
-    storage_key = f"{uuid.uuid4()}{suffix}"
+    document_id = uuid.uuid4()
+    storage_key = f"{uuid.uuid4()}.pdf"
     storage_directory = settings.regulatory_storage_dir.resolve()
     storage_directory.mkdir(parents=True, exist_ok=True)
     destination = storage_directory / storage_key
     destination.write_bytes(content)
-    parsed_effective_date = None
-    if effective_date:
-        try:
-            parsed_effective_date = datetime.strptime(effective_date, "%Y-%m-%d").date()
-        except ValueError as exc:
-            destination.unlink(missing_ok=True)
-            raise HTTPException(status_code=422, detail="Effective date must use YYYY-MM-DD format") from exc
     document = RegulatoryDocument(
-        title=cleaned_title,
-        category=RegulatoryCategory(category.value),
-        issuing_authority=cleaned_authority,
-        version=cleaned_version,
-        effective_date=parsed_effective_date,
-        applicability=cleaned_applicability,
-        university_id=university_id,
-        original_filename=filename[:255],
+        id=document_id,
+        title=title.strip(),
+        category=RegulatoryCategory.OTHER,
+        issuing_authority=issuing_authority.strip(),
+        version=version.strip(),
+        year=year,
+        programme_level=programme_level,
+        effective_date=date(year, 1, 1),
+        applicability=programme_level.upper(),
+        original_filename=file.filename[:255],
         storage_key=storage_key,
-        mime_type=SUPPORTED_MIME_TYPES[suffix],
+        mime_type="application/pdf",
         sha256=hashlib.sha256(content).hexdigest(),
         file_size=len(content),
-        page_count=extracted.page_count,
-        chunk_count=len(chunks),
-        extracted_text="\n\n".join(page.text for page in extracted.pages if page.text.strip()),
-        extraction_warnings=extracted.warnings,
+        page_count=len(pages),
+        chunk_count=0,
+        extracted_text="\n".join(pages),
+        extraction_warnings=[],
         status=RegulatoryDocumentStatus.READY,
         uploaded_by=admin.id,
     )
-    for index, (page_number, chunk_text) in enumerate(chunks):
-        document.chunks.append(
-            RegulatoryChunk(
-                chunk_index=index,
-                page_number=page_number,
-                content=chunk_text,
-                embedding=local_embedding(chunk_text),
-            )
+    document.rules = [
+        RegulatoryRule(
+            clause=item["clause"],
+            page_number=item["page_number"],
+            text=item["text"],
+            rule_type=item["rule_type"],
+            category=item["category"],
+            semester=item["semester"],
+            programme_duration_years=item.get("programme_duration_years"),
+            value=item["value"],
+            embedding=None,
+            verification_status=RuleVerificationStatus.PENDING,
+            has_conflict=False,
         )
-    for clause, page_number, rule_text in candidates:
-        document.rules.append(
-            RegulatoryRule(
-                clause=clause,
-                page_number=page_number,
-                text=rule_text,
-                embedding=local_embedding(rule_text),
-                verification_status=RuleVerificationStatus.PENDING,
-            )
+        for item in extracted_credit_rules
+    ]
+    existing_codes = {
+        code.casefold()
+        for (code,) in db.query(Course.course_code).all()
+    }
+    courses = [
+        Course(
+            **item,
+            course_type="theory",
+            description="",
+            objectives=[],
+            prerequisites=[],
+            programme_ids=[],
+            status="active",
+            created_by=admin.id,
+            source_document_id=document_id,
         )
+        for item in extracted_courses
+        if item["course_code"].casefold() not in existing_codes
+    ]
     db.add(document)
+    db.flush()
+    db.add_all(courses)
     try:
         db.commit()
-    except IntegrityError as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         destination.unlink(missing_ok=True)
-        raise HTTPException(status_code=409, detail="This regulatory document version already exists") from exc
-    except SQLAlchemyError:
-        db.rollback()
-        destination.unlink(missing_ok=True)
-        raise
+        raise HTTPException(status_code=500, detail="Regulatory document could not be saved.") from exc
     db.refresh(document)
-    return document_response(document, Counter({"pending": len(candidates)}))
+    return document_response(document, courses_imported=len(courses))
 
 
-@router.get("/{document_id}", response_model=RegulatoryDocumentResponse)
-def get_regulatory_document(
-    document_id: uuid.UUID,
-    db: DbSession,
-    _admin: AdminUser,
-) -> RegulatoryDocumentResponse:
-    document = db.get(RegulatoryDocument, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Regulatory document not found")
-    return document_response(document, document_counts(db, document.id))
-
-
-@router.get("/{document_id}/text", response_model=RegulatoryTextResponse)
-def get_extracted_document_text(
-    document_id: uuid.UUID,
-    db: DbSession,
-    _admin: AdminUser,
-) -> RegulatoryTextResponse:
-    document = db.get(RegulatoryDocument, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Regulatory document not found")
-    return RegulatoryTextResponse(
-        document_id=document.id,
-        title=document.title,
-        extracted_text=document.extracted_text,
-    )
-
-
-@router.get("/{document_id}/download")
+@router.get("/api/regulations/{document_id}/download")
 def download_regulatory_document(
     document_id: uuid.UUID,
     db: DbSession,
-    _admin: AdminUser,
+    _admin: User = Depends(AdminUser),
 ) -> FileResponse:
     document = db.get(RegulatoryDocument, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Regulatory document not found")
-    storage_directory = settings.regulatory_storage_dir.resolve()
-    file_path = (storage_directory / document.storage_key).resolve()
-    if file_path.parent != storage_directory or not file_path.is_file():
+    path = (settings.regulatory_storage_dir.resolve() / document.storage_key).resolve()
+    if path.parent != settings.regulatory_storage_dir.resolve() or not path.is_file():
         raise HTTPException(status_code=404, detail="Stored regulatory document is unavailable")
-    return FileResponse(
-        path=file_path,
-        media_type=document.mime_type,
-        filename=document.original_filename,
-        content_disposition_type="attachment",
-    )
+    return FileResponse(path, media_type="application/pdf", filename=document.original_filename)
 
 
-@router.post("/{document_id}/archive", response_model=RegulatoryDocumentResponse)
-def archive_regulatory_document(
+@router.delete("/api/regulations/{document_id}", status_code=204)
+def delete_regulatory_document(
     document_id: uuid.UUID,
     db: DbSession,
-    _admin: AdminUser,
-) -> RegulatoryDocumentResponse:
+    _admin: User = Depends(AdminUser),
+) -> None:
     document = db.get(RegulatoryDocument, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Regulatory document not found")
-    if document.status == RegulatoryDocumentStatus.READY:
-        document.status = RegulatoryDocumentStatus.ARCHIVED
-        document.archived_at = datetime.now(timezone.utc)
+
+    storage_directory = settings.regulatory_storage_dir.resolve()
+    path = (storage_directory / document.storage_key).resolve()
+    if path.parent != storage_directory:
+        raise HTTPException(status_code=500, detail="Stored regulatory document path is invalid")
+
+    db.delete(document)
+    try:
         db.commit()
-        db.refresh(document)
-    return document_response(document, document_counts(db, document.id))
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Regulatory document could not be deleted.") from exc
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Regulatory record was deleted, but its stored PDF could not be removed.",
+        ) from exc
 
 
 @rules_router.get("", response_model=list[RegulatoryRuleResponse])
 def list_regulatory_rules(
     db: DbSession,
-    _admin: AdminUser,
+    _admin: User = Depends(AdminUser),
     document_id: uuid.UUID | None = None,
-    verification_status: str | None = Query(default=None, pattern="^(pending|verified|rejected)$"),
-    conflicts_only: bool = False,
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(applied|informational|ignored)$"),
+    search: str | None = Query(default=None, max_length=300),
+    issuing_authority: str | None = Query(default=None, max_length=200),
+    year: int | None = Query(default=None, ge=1900, le=2200),
+    programme_level: str | None = Query(default=None, pattern="^(ug|pg)$"),
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=200),
 ) -> list[RegulatoryRuleResponse]:
-    query = db.query(RegulatoryRule).options(joinedload(RegulatoryRule.document))
+    query = db.query(RegulatoryRule).join(RegulatoryDocument).options(*_rule_load_options())
     if document_id:
         query = query.filter(RegulatoryRule.document_id == document_id)
-    if verification_status:
-        query = query.filter(RegulatoryRule.verification_status == RuleVerificationStatus(verification_status))
-    if conflicts_only:
-        query = query.filter(RegulatoryRule.has_conflict.is_(True))
+    if status_filter:
+        if status_filter == "ignored":
+            query = query.filter(RegulatoryRule.verification_status == RuleVerificationStatus.REJECTED)
+        elif status_filter == "applied":
+            query = query.filter(
+                RegulatoryRule.verification_status != RuleVerificationStatus.REJECTED,
+                RegulatoryRule.value.is_not(None),
+                or_(
+                    RegulatoryRule.rule_type.in_(("total_min", "total_max")),
+                    (
+                        RegulatoryRule.rule_type.in_(("category_min", "category_max", "category_total"))
+                        & RegulatoryRule.category.is_not(None)
+                    ),
+                    (
+                        RegulatoryRule.rule_type.in_(("semester_min", "semester_max", "semester_total"))
+                        & RegulatoryRule.semester.is_not(None)
+                    ),
+                ),
+                or_(
+                    RegulatoryDocument.programme_level.is_not(None),
+                    RegulatoryDocument.applicability.ilike("all applicable programmes"),
+                ),
+                RegulatoryDocument.status == RegulatoryDocumentStatus.READY,
+            )
+        else:
+            query = query.filter(
+                RegulatoryRule.verification_status != RuleVerificationStatus.REJECTED,
+                or_(
+                    RegulatoryRule.value.is_(None),
+                    RegulatoryRule.rule_type.is_(None),
+                    ~RegulatoryRule.rule_type.in_(
+                        (
+                            "category_min",
+                            "category_max",
+                            "category_total",
+                            "semester_min",
+                            "semester_max",
+                            "semester_total",
+                            "total_min",
+                            "total_max",
+                        )
+                    ),
+                    (
+                        RegulatoryRule.rule_type.in_(("category_min", "category_max", "category_total"))
+                        & RegulatoryRule.category.is_(None)
+                    ),
+                    (
+                        RegulatoryRule.rule_type.in_(("semester_min", "semester_max", "semester_total"))
+                        & RegulatoryRule.semester.is_(None)
+                    ),
+                    and_(
+                        RegulatoryDocument.programme_level.is_(None),
+                        ~RegulatoryDocument.applicability.ilike("all applicable programmes"),
+                    ),
+                    RegulatoryDocument.status != RegulatoryDocumentStatus.READY,
+                ),
+            )
+    if search:
+        query = query.filter(RegulatoryRule.text.ilike(f"%{search.strip()}%"))
+    if issuing_authority:
+        query = query.filter(RegulatoryDocument.issuing_authority.ilike(f"%{issuing_authority.strip()}%"))
+    if year is not None:
+        query = query.filter(RegulatoryDocument.year == year)
+    if programme_level:
+        query = query.filter(RegulatoryDocument.programme_level == programme_level)
     rules = query.order_by(RegulatoryRule.created_at.desc()).offset(offset).limit(limit).all()
     return [rule_response(rule) for rule in rules]
 
 
-@rules_router.patch("/{rule_id}/verification", response_model=RegulatoryRuleResponse)
-def verify_regulatory_rule(
+@rules_router.patch("/{rule_id}", response_model=RegulatoryRuleResponse)
+def update_regulatory_rule(
     rule_id: uuid.UUID,
-    payload: RuleVerificationUpdate,
+    payload: RegulatoryRuleUpdate,
     db: DbSession,
-    admin: AdminUser,
+    _admin: User = Depends(AdminUser),
 ) -> RegulatoryRuleResponse:
-    rule = (
-        db.query(RegulatoryRule)
-        .options(joinedload(RegulatoryRule.document))
-        .filter(RegulatoryRule.id == rule_id)
-        .first()
-    )
+    rule = db.query(RegulatoryRule).options(*_rule_load_options()).filter(RegulatoryRule.id == rule_id).first()
     if rule is None:
         raise HTTPException(status_code=404, detail="Regulatory rule not found")
-    if rule.document.status != RegulatoryDocumentStatus.READY:
-        raise HTTPException(status_code=409, detail="Rules from archived documents cannot be verified")
-    rule.verification_status = RuleVerificationStatus(payload.verification_status)
-    rule.verified_by = admin.id
-    rule.verified_at = datetime.now(timezone.utc)
+    for field, value in payload.model_dump().items():
+        setattr(rule, field, value)
+    rule.verification_status = RuleVerificationStatus.PENDING
+    rule.verified_by = None
+    rule.verified_at = None
     db.commit()
     return rule_response(rule)
 
 
-@rules_router.patch("/{rule_id}/conflict", response_model=RegulatoryRuleResponse)
-def flag_regulatory_rule_conflict(
+@rules_router.patch("/{rule_id}/decision", response_model=RegulatoryRuleResponse)
+def decide_regulatory_rule(
     rule_id: uuid.UUID,
-    payload: RuleConflictUpdate,
+    payload: RegulatoryRuleDecision,
     db: DbSession,
-    _admin: AdminUser,
+    admin: User = Depends(AdminUser),
 ) -> RegulatoryRuleResponse:
-    rule = (
-        db.query(RegulatoryRule)
-        .options(joinedload(RegulatoryRule.document))
-        .filter(RegulatoryRule.id == rule_id)
-        .first()
-    )
+    rule = db.query(RegulatoryRule).options(*_rule_load_options()).filter(RegulatoryRule.id == rule_id).first()
     if rule is None:
         raise HTTPException(status_code=404, detail="Regulatory rule not found")
-    rule.has_conflict = payload.has_conflict
-    rule.conflict_note = payload.conflict_note.strip() if payload.has_conflict and payload.conflict_note else None
+    if payload.status == "approved" and (rule.rule_type == "other" or rule.value is None):
+        raise HTTPException(status_code=422, detail="Complete the rule type and numeric credit value before approval.")
+    rule.verification_status = RuleVerificationStatus.VERIFIED if payload.status == "approved" else RuleVerificationStatus.REJECTED
+    rule.verified_by = admin.id if payload.status == "approved" else None
+    rule.verified_at = datetime.now(timezone.utc) if payload.status == "approved" else None
     db.commit()
     return rule_response(rule)
-
-
-def credit_constraint_response(constraint: CreditConstraint) -> CreditConstraintResponse:
-    rule = constraint.rule
-    document = rule.document
-    return CreditConstraintResponse(
-        id=constraint.id,
-        rule_id=rule.id,
-        kind=constraint.kind.value,
-        value=constraint.value,
-        rule_text=rule.text,
-        clause=rule.clause,
-        page_number=rule.page_number,
-        document_id=document.id,
-        document_title=document.title,
-        document_category=document.category.value,
-        document_version=document.version,
-        effective_date=document.effective_date,
-        applicability=document.applicability,
-    )
-
-
-@rules_router.put("/{rule_id}/credit-constraint", response_model=CreditConstraintResponse)
-def set_credit_constraint(
-    rule_id: uuid.UUID,
-    payload: CreditConstraintUpsert,
-    db: DbSession,
-    admin: AdminUser,
-) -> CreditConstraintResponse:
-    rule = (
-        db.query(RegulatoryRule)
-        .options(joinedload(RegulatoryRule.document))
-        .filter(RegulatoryRule.id == rule_id)
-        .first()
-    )
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Regulatory rule not found")
-    if (
-        rule.verification_status != RuleVerificationStatus.VERIFIED
-        or rule.has_conflict
-        or rule.document.status != RegulatoryDocumentStatus.READY
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Configure constraints only from verified, unconflicted rules in active documents",
-        )
-    constraint = (
-        db.query(CreditConstraint)
-        .filter(CreditConstraint.rule_id == rule.id, CreditConstraint.kind == CreditConstraintKind(payload.kind.value))
-        .first()
-    )
-    if constraint is None:
-        constraint = CreditConstraint(
-            rule_id=rule.id,
-            kind=CreditConstraintKind(payload.kind.value),
-            value=payload.value,
-            created_by=admin.id,
-        )
-        db.add(constraint)
-    else:
-        constraint.value = payload.value
-    db.commit()
-    db.refresh(constraint)
-    constraint.rule = rule
-    return credit_constraint_response(constraint)
-
-
-@rules_router.get("/credit-constraints", response_model=list[CreditConstraintResponse])
-def list_credit_constraints(
-    db: DbSession,
-    _admin: AdminUser,
-    document_id: uuid.UUID | None = None,
-) -> list[CreditConstraintResponse]:
-    query = (
-        db.query(CreditConstraint)
-        .join(RegulatoryRule)
-        .join(RegulatoryDocument)
-        .options(joinedload(CreditConstraint.rule).joinedload(RegulatoryRule.document))
-        .filter(
-            RegulatoryRule.verification_status == RuleVerificationStatus.VERIFIED,
-            RegulatoryRule.has_conflict.is_(False),
-            RegulatoryDocument.status == RegulatoryDocumentStatus.READY,
-        )
-    )
-    if document_id:
-        query = query.filter(RegulatoryDocument.id == document_id)
-    constraints = query.order_by(RegulatoryDocument.title, RegulatoryRule.page_number).all()
-    return [credit_constraint_response(constraint) for constraint in constraints]
-
-
-@rules_router.post("/retrieve", response_model=list[RegulatorySearchResult])
-def retrieve_verified_rules(
-    payload: RegulatorySearchRequest,
-    db: DbSession,
-    _admin: AdminUser,
-) -> list[RegulatorySearchResult]:
-    query = (
-        db.query(RegulatoryRule)
-        .join(RegulatoryDocument)
-        .options(joinedload(RegulatoryRule.document))
-        .filter(
-            RegulatoryRule.verification_status == RuleVerificationStatus.VERIFIED,
-            RegulatoryRule.has_conflict.is_(False),
-            RegulatoryDocument.status == RegulatoryDocumentStatus.READY,
-        )
-    )
-    if payload.categories:
-        categories = [RegulatoryCategory(category.value) for category in payload.categories]
-        query = query.filter(RegulatoryDocument.category.in_(categories))
-    vector = local_embedding(payload.query)
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        rows = query.with_entities(
-            RegulatoryRule,
-            RegulatoryRule.embedding.cosine_distance(vector).label("distance"),
-        ).order_by("distance").limit(payload.top_k).all()
-        ranked = [(1 - distance, rule) for rule, distance in rows]
-    else:
-        ranked = sorted(
-            ((cosine_similarity(vector, rule.embedding), rule) for rule in query.all()),
-            key=lambda item: item[0],
-            reverse=True,
-        )
-    return [
-        RegulatorySearchResult(
-            rule_id=rule.id,
-            document_id=rule.document.id,
-            title=rule.document.title,
-            category=rule.document.category.value,
-            issuing_authority=rule.document.issuing_authority,
-            version=rule.document.version,
-            effective_date=rule.document.effective_date,
-            applicability=rule.document.applicability,
-            clause=rule.clause,
-            page_number=rule.page_number,
-            text=rule.text,
-            similarity=round(similarity, 4),
-            has_conflict=rule.has_conflict,
-        )
-        for similarity, rule in ranked[: payload.top_k]
-        if similarity > 0
-    ]

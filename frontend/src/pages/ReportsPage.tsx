@@ -3,15 +3,14 @@ import { Download, FileSpreadsheet } from "lucide-react";
 import axios from "axios";
 import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
-import type { College, Course, CurriculumLibraryItem, Programme, University } from "../types";
+import type { College, CurriculumLibraryItem, Programme, University } from "../types";
 
-type ReportKind = "universities" | "colleges" | "programmes" | "courses" | "curricula";
+type ReportKind = "universities" | "colleges" | "programmes" | "curricula";
 type ReportRow = Record<string, string | number | null>;
 const labels: Record<ReportKind, string> = {
   universities: "Universities",
   colleges: "Colleges",
   programmes: "Programmes",
-  courses: "Course library",
   curricula: "Published curricula",
 };
 const csvCell = (value: string | number | null) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -24,7 +23,6 @@ export default function ReportsPage() {
   const [universities, setUniversities] = useState<University[]>([]);
   const [colleges, setColleges] = useState<College[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
   const [curricula, setCurricula] = useState<CurriculumLibraryItem[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -34,13 +32,11 @@ export default function ReportsPage() {
       api.get<University[]>("/universities", { params: { limit: 100 } }),
       api.get<College[]>("/colleges", { params: { limit: 100 } }),
       api.get<Programme[]>("/programmes", { params: { limit: 100 } }),
-      api.get<Course[]>("/courses", { params: { limit: 100 } }),
       api.get<CurriculumLibraryItem[]>("/curricula", { params: { limit: 100 } }),
-    ]).then(([universityResponse, collegeResponse, programmeResponse, courseResponse, curriculumResponse]) => {
+    ]).then(([universityResponse, collegeResponse, programmeResponse, curriculumResponse]) => {
       setUniversities(universityResponse.data);
       setColleges(collegeResponse.data);
       setProgrammes(programmeResponse.data);
-      setCourses(courseResponse.data);
       setCurricula(curriculumResponse.data);
     }).catch((reason: unknown) => setError(errorMessage(reason)))
       .finally(() => setLoading(false));
@@ -57,14 +53,11 @@ export default function ReportsPage() {
       case "programmes":
         return programmes.map(({ university_name, name, degree_type, specialization, level, duration_years, semester_count, academic_year, status }) =>
           ({ university_name, name, degree_type, specialization, level, duration_years, semester_count, academic_year, status }));
-      case "courses":
-        return courses.map(({ course_code, name, category, course_type, credits, status, programme_ids }) =>
-          ({ course_code, name, category, course_type, credits, status, programme_count: programme_ids.length }));
       case "curricula":
         return curricula.map(({ title, programme_name, university_name, academic_year, status, current_version_number, created_at }) =>
           ({ title, programme_name, university_name, academic_year, status, current_version_number, created_at }));
     }
-  }, [kind, universities, colleges, programmes, courses, curricula]);
+  }, [kind, universities, colleges, programmes, curricula]);
 
   function downloadCsv() {
     if (rows.length === 0) return;

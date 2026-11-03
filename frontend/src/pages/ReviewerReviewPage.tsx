@@ -30,10 +30,6 @@ function CurriculumDocument({ content }: { content: CurriculumDraftContent }) {
         <div className="mt-3 space-y-3">{semester.courses.map((course) => <CourseCard key={`${semester.semester_number}-${course.course_code}`} course={course} />)}</div>
       </article>)}</div>
     </section>
-    {content.regulatory_references.length > 0 && <section>
-      <h3 className="text-sm font-bold text-slate-900">Regulatory references</h3>
-      <div className="mt-2 space-y-2">{content.regulatory_references.map((reference, index) => <p key={`${reference.rule_id}-${index}`} className="rounded-lg bg-blue-50 p-3 text-sm leading-6 text-slate-700">{reference.application}</p>)}</div>
-    </section>}
   </div>;
 }
 

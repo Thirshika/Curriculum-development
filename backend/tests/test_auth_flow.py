@@ -28,8 +28,8 @@ def client(tmp_path, monkeypatch):
         cursor.close()
 
     TestingSession = sessionmaker(bind=test_engine, autoflush=False, expire_on_commit=False)
-    monkeypatch.setattr(settings, "regulatory_storage_dir", tmp_path / "regulations")
     monkeypatch.setattr(settings, "review_storage_dir", tmp_path / "reviews")
+    monkeypatch.setattr(settings, "regulatory_storage_dir", tmp_path / "regulations")
     Base.metadata.create_all(bind=test_engine)
     university = University(name="ABC University", code="ABC001")
     admin = User(
@@ -425,284 +425,16 @@ def test_reviewer_cannot_manage_universities_or_reviewer_accounts(client):
     ).status_code == 403
 
 
-def regulatory_admin_headers(client):
-    login = client.post(
-        "/api/auth/login",
-        json={"email": "admin@example.com", "password": "admin-test-password"},
-    )
-    return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def sample_regulatory_pdf(text: str) -> bytes:
-    document = pymupdf.open()
-    page = document.new_page()
-    page.insert_text((50, 60), text)
-    content = document.tobytes()
-    document.close()
-    return content
 
 
-def upload_regulatory_pdf(client, headers, title="National Credit Framework"):
-    return client.post(
-        "/api/regulations",
-        headers=headers,
-        data={
-            "category": "ncrf",
-            "title": title,
-            "issuing_authority": "UGC",
-            "version": "2023",
-            "effective_date": "2023-06-01",
-            "applicability": "Undergraduate programmes",
-        },
-        files={
-            "file": (
-                "ncrf.pdf",
-                sample_regulatory_pdf(
-                    "Section 4.1: All undergraduate programmes must include at least 120 credits. "
-                    "Institutions shall maintain the approved programme duration."
-                ),
-                "application/pdf",
-            )
-        },
-    )
 
 
-def test_regulatory_upload_extract_chunk_verify_and_retrieve(client):
-    headers = regulatory_admin_headers(client)
-    uploaded = upload_regulatory_pdf(client, headers)
-    assert uploaded.status_code == 201, uploaded.text
-    document = uploaded.json()
-    assert document["category"] == "ncrf"
-    assert document["effective_date"] == "2023-06-01"
-    assert document["chunk_count"] >= 1
-    assert document["pending_rules"] >= 1
-
-    text_response = client.get(f"/api/regulations/{document['id']}/text", headers=headers)
-    assert text_response.status_code == 200
-    assert "120 credits" in text_response.json()["extracted_text"]
-
-    rules = client.get(
-        "/api/regulatory-rules",
-        headers=headers,
-        params={"document_id": document["id"], "verification_status": "pending"},
-    )
-    assert rules.status_code == 200
-    assert rules.json()
-    rule = next(item for item in rules.json() if "120 credits" in item["text"])
-    assert rule["clause"] == "Section 4.1"
-    assert rule["page_number"] == 1
-
-    before_verification = client.post(
-        "/api/regulatory-rules/retrieve",
-        headers=headers,
-        json={"query": "minimum credits for undergraduate programmes"},
-    )
-    assert before_verification.status_code == 200
-    assert all(item["document_id"] != document["id"] for item in before_verification.json())
-
-    verified = client.patch(
-        f"/api/regulatory-rules/{rule['id']}/verification",
-        headers=headers,
-        json={"verification_status": "verified"},
-    )
-    assert verified.status_code == 200
-    retrieved = client.post(
-        "/api/regulatory-rules/retrieve",
-        headers=headers,
-        json={"query": "minimum credits for undergraduate programmes", "categories": ["ncrf"]},
-    )
-    assert retrieved.status_code == 200
-    assert retrieved.json()
-    assert retrieved.json()[0]["rule_id"] == rule["id"]
-    assert retrieved.json()[0]["similarity"] > 0
-
-    download = client.get(f"/api/regulations/{document['id']}/download", headers=headers)
-    assert download.status_code == 200
-    assert download.content.startswith(b"%PDF-")
-    assert client.get(f"/api/regulations/{document['id']}/download").status_code == 401
 
 
-def test_programme_management_and_deterministic_credit_validation(client):
-    headers = regulatory_admin_headers(client)
-    source_response = upload_regulatory_pdf(client, headers, "ABC Undergraduate Credit Rule")
-    assert source_response.status_code == 201, source_response.text
-    source = source_response.json()
-    rules = client.get(
-        "/api/regulatory-rules",
-        headers=headers,
-        params={"document_id": source["id"], "verification_status": "pending"},
-    ).json()
-    rule = next(item for item in rules if "120 credits" in item["text"])
-    assert client.patch(
-        f"/api/regulatory-rules/{rule['id']}/verification",
-        headers=headers,
-        json={"verification_status": "verified"},
-    ).status_code == 200
-    constraint = client.put(
-        f"/api/regulatory-rules/{rule['id']}/credit-constraint",
-        headers=headers,
-        json={"kind": "min_total_credits", "value": "120"},
-    )
-    assert constraint.status_code == 200, constraint.text
-    assert constraint.json()["document_id"] == source["id"]
-
-    university = client.get("/api/universities", headers=headers, params={"search": "ABC"}).json()[0]
-    programme_response = client.post(
-        "/api/programmes",
-        headers=headers,
-        json={
-            "university_id": university["id"],
-            "name": "B.E. Computer Science",
-            "degree_type": "B.E.",
-            "specialization": "Computer Science",
-            "level": "ug",
-            "duration_years": "4",
-            "semester_count": 2,
-            "academic_year": "2027-2028",
-            "qualification_level": "Level 6",
-            "regulatory_document_ids": [source["id"]],
-        },
-    )
-    assert programme_response.status_code == 201, programme_response.text
-    programme = programme_response.json()
-    assert programme["university_code"] == "ABC001"
-    assert programme["applicable_regulations"][0]["constraints"][0]["kind"] == "min_total_credits"
-
-    failed = client.post(
-        f"/api/programmes/{programme['id']}/validate-credits",
-        headers=headers,
-        json={"semester_credits": [50, 60]},
-    )
-    assert failed.status_code == 200, failed.text
-    assert failed.json()["total_credits"] == "110.00"
-    assert failed.json()["status"] == "failed"
-    assert failed.json()["checks"][0]["rule_id"] == rule["id"]
-    assert failed.json()["checks"][0]["document_title"] == source["title"]
-
-    passed = client.post(
-        f"/api/programmes/{programme['id']}/validate-credits",
-        headers=headers,
-        json={"semester_credits": [60, 60]},
-    )
-    assert passed.json()["total_credits"] == "120.00"
-    assert passed.json()["status"] == "passed"
-    assert client.get(
-        f"/api/programmes/{programme['id']}/validations",
-        headers=headers,
-    ).json()[0]["id"] == passed.json()["id"]
-
-    assert client.patch(
-        f"/api/regulatory-rules/{rule['id']}/conflict",
-        headers=headers,
-        json={"has_conflict": True, "conflict_note": "Review a possible superseding rule"},
-    ).status_code == 200
-    with_conflict = client.post(
-        f"/api/programmes/{programme['id']}/validate-credits",
-        headers=headers,
-        json={"semester_credits": [60, 60]},
-    )
-    assert with_conflict.json()["status"] == "incomplete"
-    assert with_conflict.json()["configured_constraint_count"] == 0
-    assert "cannot establish compliance" in with_conflict.json()["checks"][0]["message"]
-
-    archived = client.post(f"/api/regulations/{source['id']}/archive", headers=headers)
-    assert archived.status_code == 200
-    still_mapped = client.get("/api/programmes", headers=headers, params={"university_id": university["id"]}).json()[0]
-    assert still_mapped["applicable_regulations"][0]["status"] == "archived"
-    edited = client.patch(
-        f"/api/programmes/{programme['id']}",
-        headers=headers,
-        json={"regulatory_document_ids": [source["id"]]},
-    )
-    assert edited.status_code == 200, edited.text
-
-    invalid_plan = client.post(
-        f"/api/programmes/{programme['id']}/validate-credits",
-        headers=headers,
-        json={"semester_credits": [100]},
-    )
-    assert invalid_plan.status_code == 200
-    assert invalid_plan.json()["status"] == "failed"
-    assert "Expected a credit allocation for 2 semesters" in invalid_plan.json()["checks"][0]["message"]
 
 
-def test_course_library_and_manual_curriculum_versions(client):
-    headers = admin_headers(client)
-    university = client.get("/api/universities", headers=headers, params={"search": "ABC"}).json()[0]
-    programme_response = client.post(
-        "/api/programmes",
-        headers=headers,
-        json={
-            "university_id": university["id"],
-            "name": "Manual Design Programme",
-            "degree_type": "BSc",
-            "level": "ug",
-            "duration_years": "1",
-            "semester_count": 2,
-            "academic_year": "2028-2029",
-        },
-    )
-    assert programme_response.status_code == 201, programme_response.text
-    programme = programme_response.json()
-
-    course_ids = []
-    for code, name, category in [
-        ("MD101", "Design Foundations", "Major"),
-        ("MD102", "Applied Design", "Major"),
-    ]:
-        response = client.post(
-            "/api/courses",
-            headers=headers,
-            json={
-                "course_code": code,
-                "name": name,
-                "category": category,
-                "credits": "60",
-                "programme_ids": [programme["id"]],
-            },
-        )
-        assert response.status_code == 201, response.text
-        course_ids.append(response.json()["id"])
-
-    payload = {
-        "programme_id": programme["id"],
-        "title": "Manual curriculum",
-        "content": {
-            "semesters": [
-                {"semester_number": 1, "courses": [{"course_id": course_ids[0], "credits": "60"}]},
-                {"semester_number": 2, "courses": [{"course_id": course_ids[1], "credits": "60"}]},
-            ],
-        },
-    }
-    created = client.post("/api/curriculum-structures", headers=headers, json=payload)
-    assert created.status_code == 201, created.text
-    structure = created.json()
-    assert structure["current_version"] == 1
-    assert structure["version"]["content"]["semesters"][0]["courses"][0]["course_id"] == course_ids[0]
-
-    updated = client.patch(
-        f"/api/curriculum-structures/{structure['id']}",
-        headers=headers,
-        json={"content": payload["content"]},
-    )
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["current_version"] == 2
-    assert updated.json()["version"]["version_number"] == 2
-
-    validated = client.post(f"/api/curriculum-structures/{structure['id']}/validate", headers=headers)
-    assert validated.status_code == 200, validated.text
-    assert validated.json()["version"]["validation"]["total_credits"] == "120.00"
-    assert validated.json()["version"]["validation"]["configured_constraint_count"] == 0
-
-    invalid = client.post(
-        "/api/curriculum-structures",
-        headers=headers,
-        json={**payload, "title": "Incomplete", "content": {"semesters": [
-            {"semester_number": 1, "courses": [{"course_id": "00000000-0000-0000-0000-000000000000", "credits": "3"}]},
-            {"semester_number": 2, "courses": [{"course_id": course_ids[1], "credits": "3"}]},
-        ]}},
-    )
-    assert invalid.status_code == 422
 
 
 def test_college_management_scopes_reviewer_accounts(client):
@@ -770,146 +502,10 @@ def test_college_management_scopes_reviewer_accounts(client):
     assert college_detail["programme_count"] == 1
 
 
-def test_ai_curriculum_generation_is_grounded_editable_and_deterministically_checked(client, monkeypatch):
-    from app.schemas import GeneratedCurriculumContent
-
-    headers = regulatory_admin_headers(client)
-    source = upload_regulatory_pdf(client, headers, "Verified Curriculum Credit Rule").json()
-    rule = next(
-        item
-        for item in client.get(
-            "/api/regulatory-rules",
-            headers=headers,
-            params={"document_id": source["id"], "verification_status": "pending"},
-        ).json()
-        if "120 credits" in item["text"]
-    )
-    assert client.patch(
-        f"/api/regulatory-rules/{rule['id']}/verification",
-        headers=headers,
-        json={"verification_status": "verified"},
-    ).status_code == 200
-    assert client.put(
-        f"/api/regulatory-rules/{rule['id']}/credit-constraint",
-        headers=headers,
-        json={"kind": "min_total_credits", "value": "120"},
-    ).status_code == 200
-
-    university = client.get("/api/universities", headers=headers, params={"search": "ABC"}).json()[0]
-    programme = client.post(
-        "/api/programmes",
-        headers=headers,
-        json={
-            "university_id": university["id"],
-            "name": "B.Sc. Example Programme",
-            "degree_type": "B.Sc.",
-            "level": "ug",
-            "duration_years": 2,
-            "semester_count": 2,
-            "academic_year": "2027-2028",
-            "regulatory_document_ids": [source["id"]],
-        },
-    ).json()
-
-    generated_payload = {
-        "programme_overview": "A complete two-semester programme draft for review.",
-        "programme_educational_objectives": ["Prepare graduates for professional practice."],
-        "programme_outcomes": [{"code": "PO1", "statement": "Apply foundational programme knowledge."}],
-        "programme_specific_outcomes": [{"code": "PSO1", "statement": "Apply discipline-specific methods."}],
-        "semesters": [
-            {
-                "semester_number": semester,
-                "title": f"Semester {semester}",
-                "courses": [
-                    {
-                        "course_code": f"EX{semester}01",
-                        "title": f"Example course {semester}",
-                        "category": "Core",
-                        "credits": 60,
-                        "description": "A substantive course description for this course.",
-                        "learning_objectives": ["Understand foundational concepts."],
-                        "course_outcomes": [{"code": f"CO{semester}1", "statement": "Explain core concepts clearly."}],
-                        "units": [{"unit_number": 1, "title": "Foundations", "topics": ["Core concepts"]}],
-                        "teaching_methods": ["Lectures"],
-                        "assessment_methods": ["Assignments"],
-                        "learning_resources": ["Example textbook"],
-                    }
-                ],
-            }
-            for semester in (1, 2)
-        ],
-        "co_po_mapping": [
-            {"course_code": f"EX{semester}01", "course_outcome_code": f"CO{semester}1", "programme_outcome_codes": ["PO1"]}
-            for semester in (1, 2)
-        ],
-        "co_pso_mapping": [
-            {"course_code": f"EX{semester}01", "course_outcome_code": f"CO{semester}1", "programme_outcome_codes": ["PSO1"]}
-            for semester in (1, 2)
-        ],
-        "regulatory_references": [{"rule_id": rule["id"], "application": "Used as the source for the credit check."}],
-    }
-
-    async def fake_openai_generation(*, model, programme, evidence):
-        assert programme["programme_name"] == "B.Sc. Example Programme"
-        assert evidence[0]["rule_id"] == rule["id"]
-        return GeneratedCurriculumContent.model_validate(generated_payload)
-
-    monkeypatch.setattr("app.config.settings.openai_api_key", "test-api-key")
-    monkeypatch.setattr(
-        "app.routers.ai_generation.generate_curriculum_with_openai",
-        fake_openai_generation,
-    )
-    response = client.post(f"/api/ai-generation/programmes/{programme['id']}", headers=headers)
-    assert response.status_code == 201, response.text
-    generated = response.json()
-    assert generated["status"] == "completed"
-    assert generated["curriculum"]["credit_distribution"] == [
-        {"semester_number": 1, "credits": "60"},
-        {"semester_number": 2, "credits": "60"},
-    ]
-    assert generated["validation_status"] == "passed"
-    assert generated["regulatory_references"][0]["rule_id"] == rule["id"]
-    assert generated["regulatory_references"][0]["text"] == rule["text"]
-
-    edited_payload = generated["curriculum"]
-    edited_payload["semesters"][0]["courses"][0]["credits"] = "50"
-    edited = client.patch(
-        f"/api/ai-generation/{generated['id']}",
-        headers=headers,
-        json=edited_payload,
-    )
-    assert edited.status_code == 200, edited.text
-    assert edited.json()["curriculum"]["credit_distribution"][0]["credits"] == "50"
-    assert edited.json()["validation_status"] == "failed"
-    invalid_citation = edited.json()["curriculum"]
-    invalid_citation["regulatory_references"][0]["rule_id"] = "00000000-0000-0000-0000-000000000000"
-    rejected_edit = client.patch(
-        f"/api/ai-generation/{generated['id']}",
-        headers=headers,
-        json=invalid_citation,
-    )
-    assert rejected_edit.status_code == 422
-    dashboard = client.get("/api/admin/dashboard", headers=headers)
-    assert dashboard.json()["total_curricula"] == 1
-    history = client.get(
-        f"/api/ai-generation/programmes/{programme['id']}",
-        headers=headers,
-    )
-    assert history.status_code == 200
-    assert history.json()[0]["id"] == generated["id"]
-
-    reviewer = client.post(
-        "/api/auth/login",
-        json={"email": "reviewer@example.com", "password": "reviewer-test-password"},
-    )
-    assert client.get(
-        f"/api/ai-generation/{generated['id']}",
-        headers={"Authorization": f"Bearer {reviewer.json()['access_token']}"},
-    ).status_code == 403
 
 
 def test_ai_curriculum_generation_requires_backend_openai_configuration(client, monkeypatch):
-    headers = regulatory_admin_headers(client)
+    headers = admin_headers(client)
     monkeypatch.setattr("app.config.settings.openai_api_key", None)
     response = client.post(
         "/api/ai-generation/programmes/00000000-0000-0000-0000-000000000000",
@@ -919,6 +515,529 @@ def test_ai_curriculum_generation_requires_backend_openai_configuration(client, 
     assert "OPENAI_API_KEY" in response.json()["detail"]
 
 
+def test_regulatory_course_flow_and_manual_curriculum_structure(client):
+    headers = admin_headers(client)
+    assert client.get("/api/regulations", headers=headers).status_code == 200
+    assert client.get("/api/regulatory-rules", headers=headers).status_code == 200
+    assert client.get("/api/courses", headers=headers).status_code == 200
+    assert client.get("/api/credit-table", headers=headers).status_code == 200
+
+    university = client.get("/api/universities", headers=headers, params={"search": "ABC"}).json()[0]
+    programme_response = client.post(
+        "/api/programmes",
+        headers=headers,
+        json={
+            "university_id": university["id"],
+            "name": "Manual Design Programme",
+            "degree_type": "BSc",
+            "level": "ug",
+            "duration_years": "1",
+            "semester_count": 2,
+            "academic_year": "2028-2029",
+        },
+    )
+    assert programme_response.status_code == 201, programme_response.text
+    programme = programme_response.json()
+    assert "applicable_regulations" not in programme
+
+    content = {
+        "semesters": [
+            {"semester_number": 1, "courses": [{
+                "course_code": "MD101", "name": "Design Foundations", "category": "Major",
+                "course_type": "theory", "credits": "3",
+            }]},
+            {"semester_number": 2, "courses": [{
+                "course_code": "MD102", "name": "Applied Design", "category": "Major",
+                "course_type": "practical", "credits": "4",
+            }]},
+        ],
+    }
+    created = client.post(
+        "/api/curriculum-structures",
+        headers=headers,
+        json={"programme_id": programme["id"], "title": "Manual curriculum", "content": content},
+    )
+    assert created.status_code == 201, created.text
+    structure = created.json()
+    assert structure["version"]["content"]["semesters"][0]["courses"][0]["course_code"] == "MD101"
+    assert structure["version"]["content"]["semesters"][1]["courses"][0]["credits"] == "4"
+    assert client.post(f"/api/curriculum-structures/{structure['id']}/validate", headers=headers).status_code == 404
+
+
+def test_regulation_rule_credit_table_and_course_library_flow(client):
+    headers = admin_headers(client)
+    pdf = pymupdf.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "A minimum of 12 credits in Professional Core category is required.")
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+
+    uploaded = client.post(
+        "/api/regulations",
+        headers=headers,
+        data={
+            "title": "Undergraduate Credit Rules",
+            "issuing_authority": "Academic Board",
+            "year": "2026",
+            "version": "1.0",
+            "programme_level": "ug",
+        },
+        files={"file": ("credit-rules.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document = uploaded.json()
+    assert document["rule_count"] == 1
+    assert document["courses_imported"] == 0
+
+    rules = client.get(
+        "/api/regulatory-rules",
+        headers=headers,
+        params={"document_id": document["id"]},
+    )
+    assert rules.status_code == 200
+    rule = rules.json()[0]
+    assert rule["status"] == "applied"
+    assert rule["rule_type"] == "category_min"
+    assert rule["category"] == "Professional Core"
+    assert rule["value"] == "12.00"
+    searched_rules = client.get(
+        "/api/regulatory-rules",
+        headers=headers,
+        params={"document_id": document["id"], "search": "Professional Core", "status": "applied"},
+    )
+    assert searched_rules.status_code == 200
+    assert [item["id"] for item in searched_rules.json()] == [rule["id"]]
+    table = client.get("/api/credit-table", headers=headers, params={"programme_level": "ug"})
+    assert table.json()["rows"] == []
+
+    edited = client.patch(
+        f"/api/regulatory-rules/{rule['id']}",
+        headers=headers,
+        json={
+            "text": "A minimum of 12 credits in Professional Core category is required for every programme.",
+            "rule_type": "category_min",
+            "category": "Professional Core",
+            "semester": None,
+            "value": "12",
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["status"] == "applied"
+    table = client.get("/api/credit-table", headers=headers, params={"programme_level": "ug"})
+    assert table.json()["rows"] == []
+
+    created = client.post(
+        "/api/courses",
+        headers=headers,
+        json={
+            "course_code": "PC101",
+            "name": "Professional Core Foundations",
+            "category": "Professional Core",
+            "semester": 1,
+            "lecture_hours": "2",
+            "tutorial_hours": "1",
+            "practical_hours": "0",
+            "credits": "11",
+        },
+    )
+    assert created.status_code == 201, created.text
+    summary = client.get("/api/courses/summary", headers=headers, params={"programme_level": "ug"})
+    category_summary = next(row for row in summary.json()["categories"] if row["category"] == "Professional Core")
+    assert category_summary["status"] == "outside_limit"
+
+    imported = client.post(
+        "/api/courses/import",
+        headers=headers,
+        files={
+            "file": (
+                "courses.csv",
+                "course_code,name,category,semester,lecture_hours,tutorial_hours,practical_hours,credits\nPC102,Professional Core Practice,Professional Core,1,1,0,1,1\n",
+                "text/csv",
+            )
+        },
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json() == {"imported": 1, "errors": []}
+    summary = client.get("/api/courses/summary", headers=headers, params={"programme_level": "ug"})
+    category_summary = next(row for row in summary.json()["categories"] if row["category"] == "Professional Core")
+    assert category_summary["used_credits"] == "12.00"
+    assert category_summary["status"] == "within_limit"
+
+    overridden = client.put(
+        "/api/credit-table/overrides",
+        headers=headers,
+        json={
+            "programme_level": "ug",
+            "scope_type": "category",
+            "category": "Professional Core",
+            "limit_type": "minimum",
+            "value": "13",
+        },
+    )
+    assert overridden.status_code == 422, overridden.text
+    assert client.get("/api/courses/summary", headers=headers, params={"programme_level": "ug"}).json()["categories"][0]["status"] == "within_limit"
+
+    stored_pdfs = list(settings.regulatory_storage_dir.glob("*.pdf"))
+    assert len(stored_pdfs) == 1
+    stored_pdf = stored_pdfs[0]
+    assert stored_pdf.is_file()
+    deleted = client.delete(f"/api/regulations/{document['id']}", headers=headers)
+    assert deleted.status_code == 204
+    assert not stored_pdf.exists()
+    assert client.get(
+        "/api/regulations",
+        headers=headers,
+        params={"search": "Undergraduate Credit Rules"},
+    ).json() == []
+    assert client.get(
+        "/api/regulatory-rules",
+        headers=headers,
+        params={"document_id": document["id"]},
+    ).json() == []
+    assert client.get(
+        "/api/credit-table",
+        headers=headers,
+        params={"programme_level": "ug"},
+    ).json()["rows"] == []
+    assert client.get(
+        f"/api/regulations/{document['id']}/download",
+        headers=headers,
+    ).status_code == 404
+
+
+def test_regulation_pdf_imports_complete_course_table_rows_into_library(client):
+    headers = admin_headers(client)
+    pdf = pymupdf.open()
+    page = pdf.new_page()
+    column_edges = [30, 120, 310, 400, 460, 520, 565]
+    row_edges = [80, 112, 144, 176]
+    for x in column_edges:
+        page.draw_line((x, row_edges[0]), (x, row_edges[-1]))
+    for y in row_edges:
+        page.draw_line((column_edges[0], y), (column_edges[-1], y))
+    course_rows = [
+        ["Course Code", "Course Title", "Category", "Semester", "L-T-P", "Credits"],
+        ["CS101", "Foundations of Computing", "Major", "I", "3-1-0", "4"],
+        ["", "Applied Computing", "Major", "II", "2-0-2", "3"],
+    ]
+    for row_index, row in enumerate(course_rows):
+        for column_index, value in enumerate(row):
+            page.insert_text(
+                (column_edges[column_index] + 3, row_edges[row_index] + 21),
+                value,
+                fontsize=7,
+            )
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+
+    uploaded = client.post(
+        "/api/regulations",
+        headers=headers,
+        data={
+            "title": "Course Table Regulation",
+            "issuing_authority": "Academic Board",
+            "year": "2026",
+            "version": "1.0",
+            "programme_level": "ug",
+        },
+        files={"file": ("course-table.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document = uploaded.json()
+    assert document["courses_imported"] == 2
+    assert document["rule_count"] == 0
+
+    listed = client.get("/api/courses", headers=headers).json()
+    assert len(listed) == 2
+    explicit_code = next(course for course in listed if course["name"] == "Foundations of Computing")
+    generated_code = next(course for course in listed if course["name"] == "Applied Computing")
+    assert explicit_code["course_code"] == "CS101"
+    assert explicit_code["category"] == "Major"
+    assert explicit_code["semester"] == 1
+    assert explicit_code["lecture_hours"] == "3.00"
+    assert explicit_code["tutorial_hours"] == "1.00"
+    assert explicit_code["practical_hours"] == "0.00"
+    assert explicit_code["credits"] == "4.00"
+    assert generated_code["course_code"].startswith("AUTO")
+    assert generated_code["semester"] == 2
+    assert generated_code["lecture_hours"] == "2.00"
+    assert generated_code["tutorial_hours"] == "0.00"
+    assert generated_code["practical_hours"] == "2.00"
+    assert generated_code["credits"] == "3.00"
+
+    deleted = client.delete(f"/api/regulations/{document['id']}", headers=headers)
+    assert deleted.status_code == 204
+    assert client.get("/api/courses", headers=headers).json() == []
+
+
+def test_credit_extraction_classifies_category_totals_without_approval():
+    from app.regulatory import extract_credit_rules
+
+    extracted = extract_credit_rules([
+        "Major courses may be 4 credits as appropriate.",
+        "A minimum of 12 credits in Professional Core category is required.",
+        "Credits",
+    ])
+    assert [(rule["rule_type"], rule["category"], rule["value"]) for rule in extracted] == [
+        ("category_total", "Major", 4),
+        ("category_min", "Professional Core", 12),
+    ]
+
+
+def test_credit_extraction_reads_minimum_requirement_tables_and_continuation_pages(client):
+    from app.regulatory import extract_credit_rules, extract_credit_table_rules, extract_pdf_pages
+
+    pdf = pymupdf.open()
+    page = pdf.new_page(width=700, height=300)
+    column_edges = [30, 80, 310, 365, 420, 475, 530]
+    row_edges = [30, 65, 100, 135, 170, 205]
+    for x in column_edges:
+        page.draw_line((x, row_edges[0]), (x, row_edges[-1]))
+    for y in row_edges:
+        page.draw_line((column_edges[0], y), (column_edges[-1], y))
+    first_page_rows = [
+        ["S. No.", "Broad Category of Course", "", "Minimum Credit Requirement", "", ""],
+        ["", "", "", "3-year UG", "", "4-year UG"],
+        ["1", "Major (Core)", "60", "", "", "80"],
+        ["2", "Minor Stream", "24", "", "", "32"],
+        ["3", "Multidisciplinary", "09", "", "", "09"],
+    ]
+    for row_index, row in enumerate(first_page_rows):
+        for column_index, value in enumerate(row):
+            if value:
+                page.insert_text(
+                    (column_edges[column_index] + 3, row_edges[row_index] + 24),
+                    value,
+                    fontsize=8,
+                )
+    page.insert_text((30, 250), "A minimum of 160 credits is required for the four-year track.", fontsize=8)
+
+    page = pdf.new_page(width=500, height=180)
+    continuation_edges = [30, 80, 310, 400, 490]
+    continuation_rows = [
+        ["4", "Ability Enhancement Courses (AEC)", "08", "08"],
+        ["5", "Skill Enhancement Courses (SEC)", "09", "09"],
+        ["6", "Value Added Courses common for all UG", "06 - 08", "06 - 08"],
+        ["7", "Summer Internship", "02 - 04", "02 - 04"],
+        ["8", "Research Project / Dissertation", "-", "12"],
+        ["", "Total", "120", "160"],
+    ]
+    row_edges = [20, 45, 70, 95, 120, 145, 170]
+    for x in continuation_edges:
+        page.draw_line((x, row_edges[0]), (x, row_edges[-1]))
+    for y in row_edges:
+        page.draw_line((continuation_edges[0], y), (continuation_edges[-1], y))
+    for row_index, row in enumerate(continuation_rows):
+        for column_index, value in enumerate(row):
+            if value:
+                page.insert_text(
+                    (continuation_edges[column_index] + 3, row_edges[row_index] + 18),
+                    value,
+                    fontsize=7,
+                )
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+
+    extracted = extract_credit_table_rules(pdf_bytes)
+    prose_rules = extract_credit_rules(extract_pdf_pages(pdf_bytes))
+    values = {
+        (
+            rule["category"],
+            rule["programme_duration_years"],
+            rule["rule_type"],
+            rule["value"],
+        )
+        for rule in extracted
+    }
+    assert ("Major", 3, "category_min", 60) in values
+    assert ("Major", 4, "category_min", 80) in values
+    assert ("Minor", 3, "category_min", 24) in values
+    assert ("Minor", 4, "category_min", 32) in values
+    assert ("Ability Enhancement", 3, "category_min", 8) in values
+    assert ("Skill-Based", 4, "category_min", 9) in values
+    assert ("Value-Added", 3, "category_min", 6) in values
+    assert ("Value-Added", 3, "category_max", 8) in values
+    assert ("Value-Added", 4, "category_min", 6) in values
+    assert ("Value-Added", 4, "category_max", 8) in values
+    assert ("Summer Internship", 3, "category_min", 2) in values
+    assert ("Summer Internship", 4, "category_max", 4) in values
+    assert ("Research Project", 3, "category_min", None) in values
+    assert ("Research Project", 4, "category_min", 12) in values
+    assert (None, 3, "total_min", 120) in values
+    assert (None, 4, "total_min", 160) in values
+
+    headers = admin_headers(client)
+    uploaded = client.post(
+        "/api/regulations",
+        headers=headers,
+        data={
+            "title": "UG Credit Requirement Table",
+            "issuing_authority": "Academic Board",
+            "year": "2026",
+            "version": "1.0",
+            "programme_level": "ug",
+        },
+        files={"file": ("credit-table.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document = uploaded.json()
+    assert document["rule_count"] == len(extracted) + len(prose_rules)
+
+    three_year_table = client.get(
+        "/api/credit-table",
+        headers=headers,
+        params={"programme_level": "ug", "duration_years": 3},
+    )
+    assert three_year_table.status_code == 200
+    limits = {
+        row["category"]: row
+        for row in three_year_table.json()["rows"]
+        if row["scope_type"] == "category"
+    }
+    assert limits["Major"]["minimum"] == "60.00"
+    assert limits["Major"]["maximum"] is None
+    assert limits["Value-Added"]["minimum"] == "6.00"
+    assert limits["Value-Added"]["maximum"] is None
+    assert limits["Value-Added"]["credit_value"] == "6–8"
+    assert limits["Research Project"]["credit_value"] == "—"
+    assert set(limits) == {
+        "Major",
+        "Minor",
+        "Multidisciplinary",
+        "Ability Enhancement",
+        "Skill-Based",
+        "Value-Added",
+        "Summer Internship",
+        "Research Project",
+    }
+    assert all(row["total"] is None for row in three_year_table.json()["rows"])
+    assert all(
+        row["maximum"] is None and row["maximum_source"] is None
+        for row in three_year_table.json()["rows"]
+        if row["scope_type"] == "category"
+    )
+    three_year_total = next(row for row in three_year_table.json()["rows"] if row["scope_type"] == "total")
+    assert three_year_total["credit_value"] == "120"
+    assert three_year_total["minimum"] == "120.00"
+
+    four_year_table = client.get(
+        "/api/credit-table",
+        headers=headers,
+        params={"programme_level": "ug", "duration_years": 4},
+    )
+    assert four_year_table.status_code == 200
+    four_year_limits = {row["category"]: row for row in four_year_table.json()["rows"]}
+    assert four_year_limits["Major"]["credit_value"] == "80"
+    assert four_year_limits["Minor"]["credit_value"] == "32"
+    assert four_year_limits["Research Project"]["credit_value"] == "12"
+    four_year_total = next(row for row in four_year_table.json()["rows"] if row["scope_type"] == "total")
+    assert four_year_total["credit_value"] == "160"
+    assert four_year_total["minimum"] == "160.00"
+
+    updated_pdf = pymupdf.open()
+    updated_page = updated_pdf.new_page(width=700, height=220)
+    column_edges = [30, 80, 310, 365, 420, 475, 530]
+    row_edges = [30, 65, 100, 135, 170]
+    for x in column_edges:
+        updated_page.draw_line((x, row_edges[0]), (x, row_edges[-1]))
+    for y in row_edges:
+        updated_page.draw_line((column_edges[0], y), (column_edges[-1], y))
+    updated_rows = [
+        ["S. No.", "Broad Category of Course", "", "Minimum Credit Requirement", "", ""],
+        ["", "", "", "3-year UG", "", "4-year UG"],
+        ["1", "Major (Core)", "70", "", "", "90"],
+        ["", "Total", "130", "", "", "170"],
+    ]
+    for row_index, row in enumerate(updated_rows):
+        for column_index, text in enumerate(row):
+            if text:
+                updated_page.insert_text(
+                    (column_edges[column_index] + 3, row_edges[row_index] + 24),
+                    text,
+                    fontsize=8,
+                )
+    updated_pdf_bytes = updated_pdf.tobytes()
+    updated_pdf.close()
+    updated_upload = client.post(
+        "/api/regulations",
+        headers=headers,
+        data={
+            "title": "UGC curriculum updated",
+            "issuing_authority": "University Grants Commission",
+            "year": "2026",
+            "version": "2.0",
+            "programme_level": "ug",
+        },
+        files={"file": ("ugc-updated.pdf", updated_pdf_bytes, "application/pdf")},
+    )
+    assert updated_upload.status_code == 201, updated_upload.text
+    latest_three_year = client.get(
+        "/api/credit-table",
+        headers=headers,
+        params={"programme_level": "ug", "duration_years": 3},
+    ).json()["rows"]
+    latest_four_year = client.get(
+        "/api/credit-table",
+        headers=headers,
+        params={"programme_level": "ug", "duration_years": 4},
+    ).json()["rows"]
+    assert next(row for row in latest_three_year if row["category"] == "Major")["credit_value"] == "70"
+    assert next(row for row in latest_four_year if row["category"] == "Major")["credit_value"] == "90"
+    assert next(row for row in latest_three_year if row["scope_type"] == "total")["credit_value"] == "130"
+    assert next(row for row in latest_four_year if row["scope_type"] == "total")["credit_value"] == "170"
+
+    minimum_override = client.put(
+        "/api/credit-table/overrides",
+        headers=headers,
+        json={
+            "programme_level": "ug",
+            "scope_type": "category",
+            "category": "Major",
+            "limit_type": "minimum",
+            "value": "65",
+        },
+    )
+    assert minimum_override.status_code == 422, minimum_override.text
+
+    overridden = client.put(
+        "/api/credit-table/overrides",
+        headers=headers,
+        json={
+            "programme_level": "ug",
+            "scope_type": "category",
+            "category": "Major",
+            "limit_type": "maximum",
+            "value": "85",
+        },
+    )
+    assert overridden.status_code == 200, overridden.text
+    major_limit = next(
+        row
+        for row in client.get(
+            "/api/credit-table",
+            headers=headers,
+            params={"programme_level": "ug", "duration_years": 3},
+        ).json()["rows"]
+        if row["category"] == "Major"
+    )
+    assert major_limit["maximum"] == "85.00"
+    assert major_limit["maximum_source"]["manual"] is True
+    restored = client.delete(
+        f"/api/credit-table/overrides/{major_limit['maximum_source']['override_id']}",
+        headers=headers,
+    )
+    major_limit = next(
+        row for row in client.get(
+            "/api/credit-table",
+            headers=headers,
+            params={"programme_level": "ug", "duration_years": 3},
+        ).json()["rows"]
+        if row["category"] == "Major"
+    )
+    assert major_limit["maximum"] is None
+    assert major_limit["maximum_source"] is None
+
+
 def test_curriculum_library_versions_exports_and_university_scoped_publishing(client, monkeypatch):
     from io import BytesIO
 
@@ -926,27 +1045,7 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
     from docx import Document as WordDocument
     from app.schemas import GeneratedCurriculumContent
 
-    headers = regulatory_admin_headers(client)
-    source = upload_regulatory_pdf(client, headers, "Library Verified Credit Rule").json()
-    rule = next(
-        item
-        for item in client.get(
-            "/api/regulatory-rules",
-            headers=headers,
-            params={"document_id": source["id"], "verification_status": "pending"},
-        ).json()
-        if "120 credits" in item["text"]
-    )
-    assert client.patch(
-        f"/api/regulatory-rules/{rule['id']}/verification",
-        headers=headers,
-        json={"verification_status": "verified"},
-    ).status_code == 200
-    assert client.put(
-        f"/api/regulatory-rules/{rule['id']}/credit-constraint",
-        headers=headers,
-        json={"kind": "min_total_credits", "value": "120"},
-    ).status_code == 200
+    headers = admin_headers(client)
     university = client.get("/api/universities", headers=headers, params={"search": "ABC"}).json()[0]
     programme = client.post(
         "/api/programmes",
@@ -959,7 +1058,6 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
             "duration_years": 1,
             "semester_count": 1,
             "academic_year": "2027-2028",
-            "regulatory_document_ids": [source["id"]],
         },
     ).json()
     generated_payload = {
@@ -986,10 +1084,9 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
         }],
         "co_po_mapping": [{"course_code": "LIB101", "course_outcome_code": "CO1", "programme_outcome_codes": ["PO1"]}],
         "co_pso_mapping": [{"course_code": "LIB101", "course_outcome_code": "CO1", "programme_outcome_codes": ["PSO1"]}],
-        "regulatory_references": [{"rule_id": rule["id"], "application": "Used as the evidence for the configured credit check."}],
     }
 
-    async def fake_openai_generation(*, model, programme, evidence):
+    async def fake_openai_generation(*, model, programme):
         return GeneratedCurriculumContent.model_validate(generated_payload)
 
     monkeypatch.setattr("app.config.settings.openai_api_key", "test-api-key")
@@ -997,6 +1094,8 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
     generation = client.post(f"/api/ai-generation/programmes/{programme['id']}", headers=headers)
     assert generation.status_code == 201, generation.text
     generation_job = generation.json()
+    assert "regulatory_references" not in generation_job
+    assert "validation_status" not in generation_job
 
     created = client.post(
         "/api/curricula",
@@ -1034,7 +1133,6 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
                 exported_text = "\n".join(page.get_text() for page in exported_document)
         assert "Library test curriculum" in exported_text
         assert "Foundations" in exported_text
-        assert "Library Verified Credit Rule" in exported_text
 
     edited_content = curriculum["current_version"]["content"]
     edited_content["semesters"][0]["courses"][0]["title"] = "Updated foundations"
@@ -1092,7 +1190,7 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
     assignment = published.json()["assignment"]
     assert assignment["status"] == "pending"
     assert assignment["version_number"] == 2
-    assert assignment["validation_status"] == "passed"
+    assert "validation_status" not in assignment
     notifications = client.get("/api/curricula/reviewer/notifications", headers=reviewer_headers)
     assert notifications.status_code == 200
     assert notifications.json()[0]["assignment_id"] == assignment["id"]
@@ -1358,229 +1456,3 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
         headers=foreign_headers,
         params={"format": "pdf"},
     ).status_code == 404
-
-
-def test_programme_rejects_foreign_university_regulations_and_duplicate_year(client):
-    headers = regulatory_admin_headers(client)
-    university_response = client.post(
-        "/api/universities",
-        headers=headers,
-        json={"name": "XYZ University", "code": "XYZ001"},
-    )
-    assert university_response.status_code == 201
-    xyz = university_response.json()
-    abc = client.get("/api/universities", headers=headers, params={"search": "ABC"}).json()[0]
-    source_response = client.post(
-        "/api/regulations",
-        headers=headers,
-        data={
-            "category": "university",
-            "title": "ABC University regulations",
-            "issuing_authority": "ABC University",
-            "version": "2027",
-            "applicability": "Undergraduate programmes",
-            "university_id": abc["id"],
-        },
-        files={
-            "file": (
-                "abc-university.pdf",
-                sample_regulatory_pdf("Students shall follow the approved academic regulations."),
-                "application/pdf",
-            )
-        },
-    )
-    assert source_response.status_code == 201, source_response.text
-    source_id = source_response.json()["id"]
-    same_title_other_university = client.post(
-        "/api/regulations",
-        headers=headers,
-        data={
-            "category": "university",
-            "title": "ABC University regulations",
-            "issuing_authority": "XYZ University",
-            "version": "2027",
-            "applicability": "Undergraduate programmes",
-            "university_id": xyz["id"],
-        },
-        files={
-            "file": (
-                "xyz-university.pdf",
-                sample_regulatory_pdf("Students shall follow the approved academic regulations."),
-                "application/pdf",
-            )
-        },
-    )
-    assert same_title_other_university.status_code == 201, same_title_other_university.text
-    foreign_programme = client.post(
-        "/api/programmes",
-        headers=headers,
-        json={
-            "university_id": xyz["id"],
-            "name": "B.Sc. Biology",
-            "degree_type": "B.Sc.",
-            "level": "ug",
-            "duration_years": "3",
-            "semester_count": 6,
-            "academic_year": "2027-2028",
-            "regulatory_document_ids": [source_id],
-        },
-    )
-    assert foreign_programme.status_code == 403
-
-    programme_data = {
-        "university_id": abc["id"],
-        "name": "B.Sc. Biology",
-        "degree_type": "B.Sc.",
-        "level": "ug",
-        "duration_years": "3",
-        "semester_count": 6,
-        "academic_year": "2027-2028",
-        "regulatory_document_ids": [source_id],
-    }
-    created = client.post("/api/programmes", headers=headers, json=programme_data)
-    assert created.status_code == 201
-    duplicate = client.post("/api/programmes", headers=headers, json=programme_data)
-    assert duplicate.status_code == 409
-    updated = client.patch(
-        f"/api/programmes/{created.json()['id']}",
-        headers=headers,
-        json={"academic_year": "2028-2029", "status": "inactive"},
-    )
-    assert updated.status_code == 200
-    assert updated.json()["status"] == "inactive"
-    assert client.get("/api/programmes", headers=headers, params={"university_id": xyz["id"]}).json() == []
-
-
-def test_credit_constraint_requires_verified_rule_and_active_unconflicted_source(client):
-    headers = regulatory_admin_headers(client)
-    document = upload_regulatory_pdf(client, headers, "Rule verification gate").json()
-    rule = client.get(
-        "/api/regulatory-rules",
-        headers=headers,
-        params={"document_id": document["id"]},
-    ).json()[0]
-    pending = client.put(
-        f"/api/regulatory-rules/{rule['id']}/credit-constraint",
-        headers=headers,
-        json={"kind": "max_total_credits", "value": 150},
-    )
-    assert pending.status_code == 409
-
-
-def test_regulatory_conflict_archival_and_duplicate_version(client):
-    headers = regulatory_admin_headers(client)
-    uploaded = upload_regulatory_pdf(client, headers, "NEP credit guidance")
-    assert uploaded.status_code == 201, uploaded.text
-    document = uploaded.json()
-    rule = client.get(
-        "/api/regulatory-rules",
-        headers=headers,
-        params={"document_id": document["id"]},
-    ).json()[0]
-    verified = client.patch(
-        f"/api/regulatory-rules/{rule['id']}/verification",
-        headers=headers,
-        json={"verification_status": "verified"},
-    )
-    assert verified.status_code == 200
-
-    invalid_conflict = client.patch(
-        f"/api/regulatory-rules/{rule['id']}/conflict",
-        headers=headers,
-        json={"has_conflict": True},
-    )
-    assert invalid_conflict.status_code == 422
-    flagged = client.patch(
-        f"/api/regulatory-rules/{rule['id']}/conflict",
-        headers=headers,
-        json={"has_conflict": True, "conflict_note": "Check for a later superseding rule"},
-    )
-    assert flagged.status_code == 200
-    assert flagged.json()["has_conflict"] is True
-    conflicts = client.get("/api/regulatory-rules", headers=headers, params={"conflicts_only": True})
-    assert [item["id"] for item in conflicts.json()] == [rule["id"]]
-    retrieval = client.post(
-        "/api/regulatory-rules/retrieve",
-        headers=headers,
-        json={"query": "approved programme credits"},
-    )
-    assert all(item["rule_id"] != rule["id"] for item in retrieval.json())
-
-    duplicate = upload_regulatory_pdf(client, headers, "NEP credit guidance")
-    assert duplicate.status_code == 409
-    archived = client.post(f"/api/regulations/{document['id']}/archive", headers=headers)
-    assert archived.status_code == 200
-    assert archived.json()["status"] == "archived"
-    assert client.patch(
-        f"/api/regulatory-rules/{rule['id']}/verification",
-        headers=headers,
-        json={"verification_status": "rejected"},
-    ).status_code == 409
-
-
-def test_invalid_regulatory_uploads_and_role_access(client):
-    reviewer_login = client.post(
-        "/api/auth/login",
-        json={"email": "reviewer@example.com", "password": "reviewer-test-password"},
-    )
-    reviewer_headers = {"Authorization": f"Bearer {reviewer_login.json()['access_token']}"}
-    denied = client.get("/api/regulations", headers=reviewer_headers)
-    assert denied.status_code == 403
-
-    headers = regulatory_admin_headers(client)
-    invalid = client.post(
-        "/api/regulations",
-        headers=headers,
-        data={
-            "category": "ugc",
-            "issuing_authority": "UGC",
-            "version": "1",
-            "applicability": "Higher education",
-        },
-        files={"file": ("invalid.pdf", b"not a PDF", "application/pdf")},
-    )
-    assert invalid.status_code == 422
-
-
-def test_regulatory_docx_extracts_paragraphs_and_tables(client):
-    from io import BytesIO
-
-    docx = WordDocument()
-    docx.add_paragraph("Section 2.4: Institutions must publish the approved academic regulations.")
-    table = docx.add_table(rows=2, cols=2)
-    table.cell(0, 0).text = "Requirement"
-    table.cell(0, 1).text = "Credits"
-    table.cell(1, 0).text = "Programme minimum"
-    table.cell(1, 1).text = "120 credits"
-    data = BytesIO()
-    docx.save(data)
-
-    response = client.post(
-        "/api/regulations",
-        headers=regulatory_admin_headers(client),
-        data={
-            "category": "university",
-            "title": "Academic Regulations",
-            "issuing_authority": "ABC University",
-            "version": "2026",
-            "applicability": "All undergraduate programmes",
-            "university_id": str(
-                client.get("/api/universities", headers=regulatory_admin_headers(client)).json()[0]["id"]
-            ),
-        },
-        files={
-            "file": (
-                "academic-regulations.docx",
-                data.getvalue(),
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-        },
-    )
-    assert response.status_code == 201, response.text
-    assert response.json()["page_count"] == 0
-    assert response.json()["extraction_warnings"]
-    text_response = client.get(
-        f"/api/regulations/{response.json()['id']}/text",
-        headers=regulatory_admin_headers(client),
-    )
-    assert "120 credits" in text_response.json()["extracted_text"]

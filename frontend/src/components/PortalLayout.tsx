@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { BookOpenCheck, Building2, ChevronDown, CircleHelp, ClipboardCheck, FileStack, GraduationCap, Library, LogOut, Settings, ShieldCheck, Sparkles, UserRound, UsersRound, WalletCards, Workflow, ChartNoAxesCombined, History, School, Bell, MessageSquareText, UserCircle, ListChecks } from "lucide-react";
+import { BookOpenCheck, Building2, ChevronDown, CircleHelp, ClipboardCheck, FileStack, GraduationCap, Library, LogOut, Settings, ShieldCheck, Sparkles, UserRound, UsersRound, Workflow, ChartNoAxesCombined, History, Bell, MessageSquareText, UserCircle, WalletCards } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import type { UserRole } from "../types";
@@ -14,13 +14,11 @@ export default function PortalLayout({ role, children }: { role: UserRole; child
   const adminNavigation = [
     { to: "/admin", label: "Admin Dashboard", icon: ShieldCheck, end: true },
     { to: "/admin/universities", label: "University Management", icon: Building2, end: false },
-    { to: "/admin/colleges", label: "College Management", icon: School, end: false },
     { to: "/admin/regulations", label: "Regulatory Knowledge Base", icon: FileStack, end: false },
-    { to: "/admin/rules", label: "Rules & Credit Engine", icon: WalletCards, end: false },
+    { to: "/admin/credit-table", label: "Credit Table", icon: WalletCards, end: false },
     { to: "/admin/courses", label: "Course Library", icon: Library, end: false },
     { to: "/admin/curricula/design", label: "Curriculum Designer", icon: GraduationCap, end: false },
     { to: "/admin/curricula/generate", label: "AI Syllabus Generator", icon: Sparkles, end: false },
-    { to: "/admin/validation", label: "Validation & Compliance", icon: ClipboardCheck, end: false },
     { to: "/admin/reviewers", label: "Reviewer Management", icon: UsersRound, end: false },
     { to: "/admin/reviews", label: "Approval Workflow", icon: Workflow, end: false },
     { to: "/admin/reports", label: "Reports & Exports", icon: ChartNoAxesCombined, end: false },
@@ -32,7 +30,6 @@ export default function PortalLayout({ role, children }: { role: UserRole; child
     { to: "/reviewer/assigned", label: "Assigned Curricula", icon: Library, end: false },
     { to: "/reviewer/review", label: "Curriculum Review", icon: ClipboardCheck, end: false },
     { to: "/reviewer/comments", label: "Comments & Feedback", icon: MessageSquareText, end: false },
-    { to: "/reviewer/compliance", label: "Compliance Checklist", icon: ListChecks, end: false },
     { to: "/reviewer/history", label: "Review History", icon: History, end: false },
     { to: "/reviewer/notifications", label: "Notifications", icon: Bell, end: false },
     { to: "/reviewer/profile", label: "My Profile", icon: UserCircle, end: false },

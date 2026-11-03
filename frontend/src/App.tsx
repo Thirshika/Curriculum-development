@@ -7,13 +7,13 @@ import LoginPage from "./pages/LoginPage";
 import ReviewerDashboard from "./pages/ReviewerDashboard";
 import UniversitiesPage from "./pages/UniversitiesPage";
 import ReviewersPage from "./pages/ReviewersPage";
-import RegulationsPage from "./pages/RegulationsPage";
 import ProgrammesPage from "./pages/ProgrammesPage";
 import CurriculumGenerationPage from "./pages/CurriculumGenerationPage";
 import CurriculaLibraryPage from "./pages/CurriculaLibraryPage";
 import ReviewerReviewPage from "./pages/ReviewerReviewPage";
 import AdminFeedbackPage from "./pages/AdminFeedbackPage";
-import CollegesPage from "./pages/CollegesPage";
+import RegulationsPage from "./pages/RegulationsPage";
+import CreditTablePage from "./pages/CreditTablePage";
 import CourseLibraryPage from "./pages/CourseLibraryPage";
 import CurriculumDesignerPage from "./pages/CurriculumDesignerPage";
 import ReportsPage from "./pages/ReportsPage";
@@ -41,15 +41,14 @@ export default function App() {
     <Route element={<ProtectedRoute role="admin" />}>
       <Route path="/admin" element={<AdminDashboard />} />
       <Route path="/admin/universities" element={<UniversitiesPage />} />
-      <Route path="/admin/colleges" element={<CollegesPage />} />
-      <Route path="/admin/rules" element={<ProgrammesPage />} />
-      <Route path="/admin/validation" element={<ProgrammesPage />} />
-      <Route path="/admin/reviewers" element={<ReviewersPage />} />
+      <Route path="/admin/colleges" element={<Navigate to="/admin/universities" replace />} />
       <Route path="/admin/regulations" element={<RegulationsPage />} />
+      <Route path="/admin/credit-table" element={<CreditTablePage />} />
+      <Route path="/admin/courses" element={<CourseLibraryPage />} />
+      <Route path="/admin/reviewers" element={<ReviewersPage />} />
       <Route path="/admin/programmes" element={<ProgrammesPage />} />
       <Route path="/admin/curricula/generate" element={<CurriculumGenerationPage />} />
       <Route path="/admin/curricula/design" element={<CurriculumDesignerPage />} />
-      <Route path="/admin/courses" element={<CourseLibraryPage />} />
       <Route path="/admin/curricula" element={<CurriculaLibraryPage />} />
       <Route path="/admin/reviews" element={<AdminFeedbackPage />} />
       <Route path="/admin/reports" element={<ReportsPage />} />
@@ -60,7 +59,6 @@ export default function App() {
       <Route path="/reviewer/assigned" element={<ReviewerWorkspacePage section="assigned" />} />
       <Route path="/reviewer/review" element={<ReviewerWorkspacePage section="review" />} />
       <Route path="/reviewer/comments" element={<ReviewerWorkspacePage section="comments" />} />
-      <Route path="/reviewer/compliance" element={<ReviewerWorkspacePage section="compliance" />} />
       <Route path="/reviewer/history" element={<ReviewerWorkspacePage section="history" />} />
       <Route path="/reviewer/notifications" element={<ReviewerWorkspacePage section="notifications" />} />
       <Route path="/reviewer/profile" element={<ReviewerWorkspacePage section="profile" />} />

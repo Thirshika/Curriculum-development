@@ -207,6 +207,8 @@ class RegulatoryDocument(Base):
     )
     issuing_authority: Mapped[str] = mapped_column(String(200), nullable=False)
     version: Mapped[str] = mapped_column(String(80), nullable=False)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    programme_level: Mapped[str | None] = mapped_column(String(2), nullable=True)
     effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     applicability: Mapped[str] = mapped_column(String(500), nullable=False)
     university_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -257,6 +259,7 @@ class RegulatoryRule(Base):
     __tablename__ = "regulatory_rules"
     __table_args__ = (
         Index("ix_regulatory_rules_verification", "verification_status", "has_conflict"),
+        Index("ix_regulatory_rules_programme_duration_years", "programme_duration_years"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -266,9 +269,14 @@ class RegulatoryRule(Base):
     clause: Mapped[str | None] = mapped_column(String(240), nullable=True)
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    rule_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    semester: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    programme_duration_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     embedding: Mapped[list[float]] = mapped_column(
         Vector(384).with_variant(JSON(), "sqlite"),
-        nullable=False,
+        nullable=True,
     )
     verification_status: Mapped[RuleVerificationStatus] = mapped_column(
         Enum(RuleVerificationStatus, name="rule_verification_status", values_callable=lambda values: [item.value for item in values]),
@@ -360,9 +368,13 @@ class Course(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("regulatory_documents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     course_code: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
+    semester: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     course_type: Mapped[str] = mapped_column(String(80), nullable=False, default="theory")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     objectives: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list)
@@ -374,6 +386,26 @@ class Course(Base):
     programme_ids: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class CreditTableOverride(Base):
+    __tablename__ = "credit_table_overrides"
+    __table_args__ = (
+        UniqueConstraint("programme_level", "scope_key", "limit_type", name="uq_credit_table_override_scope"),
+        Index("ix_credit_table_overrides_level", "programme_level"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    programme_level: Mapped[str] = mapped_column(String(2), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    semester: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    limit_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    value: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    updated_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
