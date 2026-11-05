@@ -14,12 +14,12 @@ export default function PortalLayout({ role, children }: { role: UserRole; child
   const adminNavigation = [
     { to: "/admin", label: "Admin Dashboard", icon: ShieldCheck, end: true },
     { to: "/admin/universities", label: "University Management", icon: Building2, end: false },
+    { to: "/admin/reviewers", label: "Reviewer Management", icon: UsersRound, end: false },
     { to: "/admin/regulations", label: "Regulatory Knowledge Base", icon: FileStack, end: false },
     { to: "/admin/credit-table", label: "Credit Table", icon: WalletCards, end: false },
     { to: "/admin/courses", label: "Course Library", icon: Library, end: false },
     { to: "/admin/curricula/design", label: "Curriculum Designer", icon: GraduationCap, end: false },
     { to: "/admin/curricula/generate", label: "AI Syllabus Generator", icon: Sparkles, end: false },
-    { to: "/admin/reviewers", label: "Reviewer Management", icon: UsersRound, end: false },
     { to: "/admin/reviews", label: "Approval Workflow", icon: Workflow, end: false },
     { to: "/admin/reports", label: "Reports & Exports", icon: ChartNoAxesCombined, end: false },
     { to: "/admin/curricula", label: "Version History", icon: History, end: false },

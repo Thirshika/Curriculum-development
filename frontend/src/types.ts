@@ -108,11 +108,6 @@ export interface CurriculumStructure {
   updated_at: string;
 }
 
-export interface ProvisionedReviewer {
-  reviewer: Reviewer;
-  temporary_password: string;
-}
-
 export interface Programme {
   id: string;
   university_id: string;

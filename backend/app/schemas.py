@@ -326,6 +326,7 @@ class ReviewerCreate(BaseModel):
     college_id: uuid.UUID | None = None
     full_name: str = Field(min_length=2, max_length=160)
     email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
 
     @field_validator("full_name", mode="before")
     @classmethod
@@ -336,6 +337,13 @@ class ReviewerCreate(BaseModel):
     @classmethod
     def normalize_email(cls, value: EmailStr) -> EmailStr:
         return value.lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if value.strip() != value:
+            raise ValueError("Password cannot start or end with whitespace")
+        return value
 
 
 class ReviewerUpdate(BaseModel):
@@ -369,13 +377,15 @@ class ReviewerResponse(BaseModel):
     created_at: datetime
 
 
-class ReviewerProvisionedResponse(BaseModel):
-    reviewer: ReviewerResponse
-    temporary_password: str
+class ReviewerPasswordReset(BaseModel):
+    password: str = Field(min_length=12, max_length=128)
 
-
-class TemporaryPasswordResponse(BaseModel):
-    temporary_password: str
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if value.strip() != value:
+            raise ValueError("Password cannot start or end with whitespace")
+        return value
 
 
 class ProgrammeLevelValue(str, Enum):

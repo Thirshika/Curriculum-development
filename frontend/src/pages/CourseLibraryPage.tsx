@@ -1,10 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Trash2, Upload, X } from "lucide-react";
 import axios from "axios";
-import { Link } from "react-router-dom";
 import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
-import type { Course } from "../types";
+import type { Course, CreditTableRow } from "../types";
 
 type CourseForm = Omit<Course, "id" | "status">;
 const emptyForm: CourseForm = {
@@ -21,8 +20,10 @@ const errorMessage = (reason: unknown) => {
 
 export default function CourseLibraryPage() {
   const [courses, setCourses] = useState<Course[]>([]);
+  const [creditCategories, setCreditCategories] = useState<CreditTableRow[]>([]);
   const [form, setForm] = useState<CourseForm>(emptyForm);
   const [editingId, setEditingId] = useState("");
+  const [customCategory, setCustomCategory] = useState(false);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [semester, setSemester] = useState("");
@@ -31,7 +32,27 @@ export default function CourseLibraryPage() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [categoryError, setCategoryError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    async function loadCreditCategories() {
+      try {
+        const { data } = await api.get<{ rows: CreditTableRow[] }>("/credit-table", {
+          params: { programme_level: "ug", duration_years: 3 },
+        });
+        if (active) {
+          setCreditCategories(data.rows.filter((row) => row.scope_type === "category" && row.category));
+          setCategoryError("");
+        }
+      } catch (reason) {
+        if (active) setCategoryError(errorMessage(reason));
+      }
+    }
+    void loadCreditCategories();
+    return () => { active = false; };
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -81,6 +102,7 @@ export default function CourseLibraryPage() {
       else await api.post("/courses", payload);
       setNotice(editingId ? "Course updated." : "Course added to the library.");
       setEditingId("");
+      setCustomCategory(false);
       setForm(emptyForm);
       await loadData();
     } catch (reason) { setError(errorMessage(reason)); }
@@ -89,6 +111,7 @@ export default function CourseLibraryPage() {
 
   function editCourse(course: Course) {
     setEditingId(course.id);
+    setCustomCategory(false);
     setForm({
       course_code: course.course_code,
       name: course.name,
@@ -136,11 +159,33 @@ export default function CourseLibraryPage() {
     finally { setBusy(false); }
   }
 
+  function changeCategory(value: string) {
+    if (value === "__custom__") {
+      setCustomCategory(true);
+      setForm((current) => ({ ...current, category: "", credits: "" }));
+      return;
+    }
+    const categoryCredit = creditCategories.find((item) => item.category && item.category.toLowerCase() === value.toLowerCase());
+    setCustomCategory(false);
+    setForm((current) => ({
+      ...current,
+      category: value,
+      credits: categoryCredit?.minimum ?? "",
+    }));
+  }
+
+  const categoryOptions = Array.from(new Set([
+    ...creditCategories.flatMap((item) => item.category ? [item.category] : []),
+    ...(form.category && !creditCategories.some((item) => item.category?.toLowerCase() === form.category.toLowerCase())
+      ? [form.category]
+      : []),
+  ]));
   const inputClass = "form-input mt-1";
   return <PortalLayout role="admin">
-    <div><p className="text-sm font-medium text-navy">STEP 3 · COURSE LIBRARY</p><h1 className="mt-2 text-[30px] font-bold tracking-tight text-ink">Course Library</h1><p className="mt-2 max-w-3xl text-sm text-slate-500">Courses with complete title, category, semester, L–T–P, and credit details are imported from uploaded regulation tables. You can also add courses manually or import a CSV. Shared credit limits are available in the <Link to="/admin/credit-table" className="font-semibold text-navy underline underline-offset-2">Credit Table</Link>.</p></div>
+    <div><p className="text-sm font-medium text-navy">COURSE LIBRARY</p><h1 className="mt-2 text-[30px] font-bold tracking-tight text-ink">Course Library</h1><p className="mt-2 max-w-3xl text-sm text-slate-500"></p></div>
     {notice && <div role="status" className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div>}
     {error && <div role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+    {categoryError && <div role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Could not load course categories: {categoryError}</div>}
     {csvErrors.length > 0 && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">Some CSV rows were skipped:</p><ul className="mt-2 list-inside list-disc space-y-1">{csvErrors.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul></div>}
     <div className="mt-6 grid min-w-0 items-start gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
       <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
@@ -148,13 +193,19 @@ export default function CourseLibraryPage() {
         <form onSubmit={(event) => void submitCourse(event)} className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="text-xs font-semibold text-slate-600">Course code<input required minLength={2} maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={form.course_code} onChange={(event) => setField("course_code", event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Course title<input required minLength={2} maxLength={200} value={form.name} onChange={(event) => setField("name", event.target.value)} className={inputClass} /></label>
-          <label className="text-xs font-semibold text-slate-600">Category<input required minLength={2} maxLength={100} value={form.category} onChange={(event) => setField("category", event.target.value)} className={inputClass} /></label>
+          <label className="text-xs font-semibold text-slate-600">Category{customCategory
+            ? <div className="mt-1 flex gap-2"><input required minLength={2} maxLength={100} autoFocus value={form.category} onChange={(event) => setField("category", event.target.value)} className="form-input min-w-0 flex-1" /><button type="button" onClick={() => { setCustomCategory(false); setField("category", ""); }} className="shrink-0 rounded-lg border px-2 text-xs font-semibold text-slate-600">Choose from list</button></div>
+            : <select required value={form.category} onChange={(event) => changeCategory(event.target.value)} className={inputClass}>
+              <option value="" disabled>Select a category</option>
+              {categoryOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+              <option value="__custom__">Other (enter manually)</option>
+            </select>}</label>
           <label className="text-xs font-semibold text-slate-600">Semester<input required type="number" min="1" max="24" value={form.semester} onChange={(event) => setField("semester", Number(event.target.value))} className={inputClass} /></label>
           <label className="text-xs font-semibold text-slate-600">Lecture hours<input type="number" min="0" max="1000" step="0.01" value={form.lecture_hours} onChange={(event) => setField("lecture_hours", event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold text-slate-600">Tutorial hours<input type="number" min="0" max="1000" step="0.01" value={form.tutorial_hours} onChange={(event) => setField("tutorial_hours", event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold text-slate-600">Practical hours<input type="number" min="0" max="1000" step="0.01" value={form.practical_hours} onChange={(event) => setField("practical_hours", event.target.value)} className={inputClass} /></label>
-          <label className="text-xs font-semibold text-slate-600">Credits<input required type="number" min="0.01" max="1000" step="0.01" value={form.credits} onChange={(event) => setField("credits", event.target.value)} className={inputClass} /></label>
-          <div className="flex gap-2 sm:col-span-2 lg:col-span-4"><button disabled={busy} className="rounded-xl bg-navy px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy ? "Saving…" : editingId ? "Save changes" : "Add course"}</button>{editingId && <button type="button" onClick={() => { setEditingId(""); setForm(emptyForm); }} className="inline-flex items-center gap-1 rounded-xl border px-4 py-2.5 text-sm font-semibold text-slate-600"><X size={15} />Cancel</button>}</div>
+          <label className="text-xs font-semibold text-slate-600">Credits<input required type="number" min="0.01" max="1000" step="0.01" value={form.credits} onChange={(event) => setField("credits", event.target.value)} className={inputClass} /><span className="mt-1 block font-normal text-slate-400">Defaults to the selected category’s minimum; you can adjust it.</span></label>
+          <div className="flex gap-2 sm:col-span-2 lg:col-span-4"><button disabled={busy} className="rounded-xl bg-navy px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy ? "Saving…" : editingId ? "Save changes" : "Add course"}</button>{editingId && <button type="button" onClick={() => { setEditingId(""); setCustomCategory(false); setForm(emptyForm); }} className="inline-flex items-center gap-1 rounded-xl border px-4 py-2.5 text-sm font-semibold text-slate-600"><X size={15} />Cancel</button>}</div>
         </form>
       </section>
       <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-card">

@@ -1,5 +1,3 @@
-import secrets
-import string
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,27 +9,13 @@ from app.dependencies import DbSession, require_role
 from app.models import College, RefreshSession, University, UniversityStatus, User, UserRole
 from app.schemas import (
     ReviewerCreate,
-    ReviewerProvisionedResponse,
+    ReviewerPasswordReset,
     ReviewerResponse,
     ReviewerUpdate,
-    TemporaryPasswordResponse,
 )
 from app.security import hash_password
 
 router = APIRouter(prefix="/api/reviewers", tags=["reviewers"])
-
-
-def generate_temporary_password() -> str:
-    alphabet = string.ascii_letters + string.digits + "!@#$%_-"
-    while True:
-        password = "".join(secrets.choice(alphabet) for _ in range(20))
-        if (
-            any(char.islower() for char in password)
-            and any(char.isupper() for char in password)
-            and any(char.isdigit() for char in password)
-            and any(char in "!@#$%_-" for char in password)
-        ):
-            return password
 
 
 def reviewer_response(reviewer: User) -> ReviewerResponse:
@@ -82,12 +66,12 @@ def list_reviewers(
     return [reviewer_response(reviewer) for reviewer in reviewers]
 
 
-@router.post("", response_model=ReviewerProvisionedResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ReviewerResponse, status_code=status.HTTP_201_CREATED)
 def create_reviewer(
     payload: ReviewerCreate,
     db: DbSession,
     _admin: User = Depends(require_role(UserRole.ADMIN)),
-) -> ReviewerProvisionedResponse:
+) -> ReviewerResponse:
     university = db.get(University, payload.university_id)
     if university is None:
         raise HTTPException(status_code=404, detail="University not found")
@@ -113,16 +97,15 @@ def create_reviewer(
         User.college_id.is_(None),
     ).first():
         raise HTTPException(status_code=409, detail="This university already has a university-wide reviewer account.")
-    temporary_password = generate_temporary_password()
     reviewer = User(
         email=str(payload.email).lower(),
         username=username,
         full_name=payload.full_name,
-        password_hash=hash_password(temporary_password),
+        password_hash=hash_password(payload.password),
         role=UserRole.REVIEWER,
         university_id=university.id,
         college_id=college.id if college else None,
-        must_change_password=True,
+        must_change_password=False,
     )
     db.add(reviewer)
     try:
@@ -133,10 +116,7 @@ def create_reviewer(
     db.refresh(reviewer)
     reviewer.university = university
     reviewer.college = college
-    return ReviewerProvisionedResponse(
-        reviewer=reviewer_response(reviewer),
-        temporary_password=temporary_password,
-    )
+    return reviewer_response(reviewer)
 
 
 @router.patch("/{reviewer_id}", response_model=ReviewerResponse)
@@ -175,18 +155,19 @@ def update_reviewer(
     return reviewer_response(reviewer)
 
 
-@router.post("/{reviewer_id}/reset-password", response_model=TemporaryPasswordResponse)
+@router.post("/{reviewer_id}/reset-password", response_model=ReviewerResponse)
 def reset_reviewer_password(
     reviewer_id: uuid.UUID,
+    payload: ReviewerPasswordReset,
     db: DbSession,
     _admin: User = Depends(require_role(UserRole.ADMIN)),
-) -> TemporaryPasswordResponse:
+) -> ReviewerResponse:
     reviewer = db.query(User).filter(User.id == reviewer_id, User.role == UserRole.REVIEWER).first()
     if reviewer is None:
         raise HTTPException(status_code=404, detail="Reviewer not found")
-    temporary_password = generate_temporary_password()
-    reviewer.password_hash = hash_password(temporary_password)
-    reviewer.must_change_password = True
+    reviewer.password_hash = hash_password(payload.password)
+    reviewer.must_change_password = False
     db.query(RefreshSession).filter(RefreshSession.user_id == reviewer.id).delete()
     db.commit()
-    return TemporaryPasswordResponse(temporary_password=temporary_password)
+    db.refresh(reviewer)
+    return reviewer_response(reviewer)

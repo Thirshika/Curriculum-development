@@ -351,6 +351,18 @@ def test_reviewer_provisioning_one_per_university_and_password_reset(client):
         headers=headers,
         json={"name": "XYZ University", "code": "XYZ001"},
     ).json()
+    invalid_password = client.post(
+        "/api/reviewers",
+        headers=headers,
+        json={
+            "university_id": university["id"],
+            "full_name": "XYZ Reviewer",
+            "email": "xyz-reviewer@example.com",
+            "password": "short",
+        },
+    )
+    assert invalid_password.status_code == 422
+
     created = client.post(
         "/api/reviewers",
         headers=headers,
@@ -358,13 +370,14 @@ def test_reviewer_provisioning_one_per_university_and_password_reset(client):
             "university_id": university["id"],
             "full_name": "XYZ Reviewer",
             "email": "xyz-reviewer@example.com",
+            "password": "xyz-reviewer-password",
         },
     )
     assert created.status_code == 201
-    provisioned = created.json()
-    assert provisioned["reviewer"]["must_change_password"] is True
-    assert provisioned["reviewer"]["username"] == "XYZ001"
-    assert len(provisioned["temporary_password"]) >= 16
+    reviewer = created.json()
+    assert reviewer["must_change_password"] is False
+    assert reviewer["username"] == "XYZ001"
+    assert "temporary_password" not in reviewer
 
     duplicate = client.post(
         "/api/reviewers",
@@ -373,17 +386,19 @@ def test_reviewer_provisioning_one_per_university_and_password_reset(client):
             "university_id": university["id"],
             "full_name": "Second Reviewer",
             "email": "second-reviewer@example.com",
+            "password": "second-reviewer-password",
         },
     )
     assert duplicate.status_code == 409
 
-    reviewer_id = provisioned["reviewer"]["id"]
+    reviewer_id = reviewer["id"]
     username_login = client.post(
         "/api/auth/login",
-        json={"username": "xyz001", "password": provisioned["temporary_password"]},
+        json={"username": "xyz001", "password": "xyz-reviewer-password"},
     )
     assert username_login.status_code == 200
     assert username_login.json()["user"]["username"] == "XYZ001"
+    assert username_login.json()["user"]["must_change_password"] is False
 
     updated = client.patch(
         f"/api/reviewers/{reviewer_id}",
@@ -393,21 +408,31 @@ def test_reviewer_provisioning_one_per_university_and_password_reset(client):
     assert updated.status_code == 200
     assert updated.json()["full_name"] == "Updated XYZ Reviewer"
 
-    reset = client.post(f"/api/reviewers/{reviewer_id}/reset-password", headers=headers)
+    reset = client.post(
+        f"/api/reviewers/{reviewer_id}/reset-password",
+        headers=headers,
+        json={"password": "xyz-reviewer-reset-password"},
+    )
     assert reset.status_code == 200
-    reset_password = reset.json()["temporary_password"]
-    assert reset_password != provisioned["temporary_password"]
+    assert reset.json()["must_change_password"] is False
+    assert "password" not in reset.json()
+    invalid_reset = client.post(
+        f"/api/reviewers/{reviewer_id}/reset-password",
+        headers=headers,
+        json={"password": "short"},
+    )
+    assert invalid_reset.status_code == 422
     old_password_login = client.post(
         "/api/auth/login",
-        json={"email": "xyz-reviewer@example.com", "password": provisioned["temporary_password"]},
+        json={"email": "xyz-reviewer@example.com", "password": "xyz-reviewer-password"},
     )
     assert old_password_login.status_code == 401
     new_password_login = client.post(
         "/api/auth/login",
-        json={"email": "xyz-reviewer@example.com", "password": reset_password},
+        json={"email": "xyz-reviewer@example.com", "password": "xyz-reviewer-reset-password"},
     )
     assert new_password_login.status_code == 200
-    assert new_password_login.json()["user"]["must_change_password"] is True
+    assert new_password_login.json()["user"]["must_change_password"] is False
 
 
 def test_reviewer_cannot_manage_universities_or_reviewer_accounts(client):
@@ -455,16 +480,17 @@ def test_college_management_scopes_reviewer_accounts(client):
             "college_id": college.json()["id"],
             "full_name": "North Campus Reviewer",
             "email": "north-reviewer@example.com",
+            "password": "north-reviewer-password",
         },
     )
     assert created.status_code == 201, created.text
-    reviewer = created.json()["reviewer"]
+    reviewer = created.json()
     assert reviewer["college_id"] == college.json()["id"]
     assert reviewer["college_name"] == "North Campus"
     assert reviewer["username"] == "ABC001-NORTH"
     reviewer_login = client.post(
         "/api/auth/login",
-        json={"username": reviewer["username"], "password": created.json()["temporary_password"]},
+        json={"username": reviewer["username"], "password": "north-reviewer-password"},
     )
     assert reviewer_login.status_code == 200
     assert reviewer_login.json()["user"]["college_name"] == "North Campus"
@@ -478,6 +504,7 @@ def test_college_management_scopes_reviewer_accounts(client):
             "college_id": college.json()["id"],
             "full_name": "Another Reviewer",
             "email": "another-reviewer@example.com",
+            "password": "another-reviewer-password",
         },
     )
     assert duplicate.status_code == 409
@@ -1162,6 +1189,7 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
             "university_id": foreign_university["id"],
             "full_name": "Foreign Reviewer",
             "email": "foreign-reviewer@example.com",
+            "password": "foreign-reviewer-password",
         },
     )
     assert foreign_reviewer.status_code == 201, foreign_reviewer.text
@@ -1429,18 +1457,10 @@ def test_curriculum_library_versions_exports_and_university_scoped_publishing(cl
 
     foreign_login = client.post(
         "/api/auth/login",
-        json={"email": "foreign-reviewer@example.com", "password": foreign_reviewer.json()["temporary_password"]},
+        json={"email": "foreign-reviewer@example.com", "password": "foreign-reviewer-password"},
     )
+    assert foreign_login.status_code == 200
     foreign_headers = {"Authorization": f"Bearer {foreign_login.json()['access_token']}"}
-    foreign_changed = client.post(
-        "/api/auth/change-password",
-        headers=foreign_headers,
-        json={
-            "current_password": foreign_reviewer.json()["temporary_password"],
-            "new_password": "foreign-updated-strong-password",
-        },
-    )
-    assert foreign_changed.status_code == 200
     assert client.get(
         f"/api/reviews/assignments/{assignment['id']}",
         headers=foreign_headers,

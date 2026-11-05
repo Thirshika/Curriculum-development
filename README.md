@@ -11,7 +11,7 @@ Phase 1–8 implementation of the AI-Powered Curriculum Design & University Revi
 - University identity association for reviewer accounts and an initial database migration.
 - Bootstrap accounts are optional environment settings. Admins and reviewers use separate sign-in pages at `/login/admin` and `/login/reviewer`; reviewers can register against an existing university/college or request a new university account.
 - Admin university management with search, pagination, profile editing, status changes, and reviewer assignment visibility.
-- Admin reviewer management with one reviewer per university, university-code login usernames, generated one-time passwords, forced password changes, password reset, and account activation controls. Public reviewer signups remain inactive until an administrator activates them; new university signups require activating both the university and reviewer.
+- Admin reviewer management with one reviewer per university, university-code login usernames, administrator-set passwords on account creation and reset, and account activation controls. Password resets revoke existing sessions. Public reviewer signups remain inactive until an administrator activates them; new university signups require activating both the university and reviewer.
 - Admin programme management is university-scoped and includes duration, semester count, level, qualification label, and academic year.
 - The Regulatory Knowledge Base accepts regulation PDFs, immediately applies detected complete credit rules, extracts duration-specific undergraduate category values from supported minimum-credit tables, and uses the newest uploaded document with a recognized table for the selected degree duration. It also imports complete course rows from tables when title, category, semester, L–T–P, and credits are present. Existing course codes are preserved; stable codes are generated when omitted. Incomplete course details are not invented.
 - The Credit Table switches between 3-year and 4-year degree values. Maximum credits are entered manually for each broad course category.
@@ -78,10 +78,10 @@ Open `http://localhost:5173`. Vite proxies `/api` requests to the local FastAPI 
 - `PATCH /api/universities/{id}` — update profile details.
 - `PATCH /api/universities/{id}/status` — activate or deactivate a university; deactivation also deactivates its reviewer and revokes refresh sessions.
 - `GET /api/reviewers` — administrator-only searchable reviewer list.
-- `POST /api/reviewers` — create and assign a reviewer; returns a one-time generated temporary password.
+- `POST /api/reviewers` — create and assign a reviewer with an administrator-set password (minimum 12 characters).
 - Reviewers can sign in using their email address or their assigned university code as username.
 - `PATCH /api/reviewers/{id}` — update reviewer name/email or activation.
-- `POST /api/reviewers/{id}/reset-password` — generate a new one-time password, force a password change, and revoke prior refresh sessions.
+- `POST /api/reviewers/{id}/reset-password` — set a new reviewer password (minimum 12 characters) and revoke prior refresh sessions.
 - `GET /api/programmes` — list programmes with search, university filter, pagination, and status.
 - `POST /api/programmes` — create a programme.
 - `PATCH /api/programmes/{id}` — edit programme structure or status.
