@@ -50,6 +50,13 @@ export default function UniversitiesPage() {
   }, [offset, search]);
 
   useEffect(() => { void loadUniversities(); }, [loadUniversities]);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setOffset(0);
+      setSearch(searchText.trim());
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchText]);
 
   function startCreate() {
     setEditing(null);
@@ -124,10 +131,10 @@ export default function UniversitiesPage() {
     }
   }
 
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function clearSearch() {
+    setSearchText("");
+    setSearch("");
     setOffset(0);
-    setSearch(searchText.trim());
   }
 
   return <PortalLayout role="admin">
@@ -155,13 +162,13 @@ export default function UniversitiesPage() {
     </section>}
 
     <section className="mt-7 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card">
-      <div className="flex flex-col justify-between gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:px-6"><div><h2 className="text-base font-bold text-ink">Universities</h2><p className="mt-1 text-sm text-slate-500">Profiles and assigned reviewer accounts.</p></div><form onSubmit={submitSearch} className="flex gap-2"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className="form-input h-10 w-full pl-9 sm:w-64" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search name or code" /></div><button className="rounded-xl border border-slate-200 px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50">Search</button></form></div>
+      <div className="flex flex-col justify-between gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:px-6"><div><h2 className="text-base font-bold text-ink">Universities</h2><p className="mt-1 text-sm text-slate-500">Profiles and assigned reviewer accounts.</p></div><div className="relative w-full sm:w-72"><Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input aria-label="Search universities" className="form-input search-input search-input-clear h-10 w-full" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Name, code, contact, or reviewer" />{searchText && <button type="button" aria-label="Clear search" onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={15} /></button>}</div></div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[840px] text-left text-sm">
           <thead className="bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wide text-slate-500"><tr><th className="px-6 py-3">University</th><th className="px-6 py-3">Contact</th><th className="px-6 py-3">Reviewer</th><th className="px-6 py-3">Status</th><th className="px-6 py-3 text-right">Actions</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {loading && <tr><td colSpan={5} className="px-6 py-12 text-center text-sm text-slate-500">Loading universities…</td></tr>}
-            {!loading && universities.length === 0 && <tr><td colSpan={5} className="px-6 py-14 text-center"><div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-50 text-slate-400"><Building2 size={20} /></div><p className="mt-3 text-sm font-semibold text-slate-700">No universities found</p><p className="mt-1 text-xs text-slate-500">{search ? "Try another search, or add a new university." : "Create the first university to get started."}</p></td></tr>}
+            {!loading && universities.length === 0 && <tr><td colSpan={5} className="px-6 py-14 text-center"><div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-50 text-slate-400"><Building2 size={20} /></div><p className="mt-3 text-sm font-semibold text-slate-700">No universities found</p><p className="mt-1 text-xs text-slate-500">{search ? "Try a different search or clear the filter." : "Create the first university to get started."}</p></td></tr>}
             {!loading && universities.map((university) => <tr key={university.id} className="hover:bg-slate-50/60">
               <td className="px-6 py-4"><div className="flex items-center gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-blue-50 text-navy">{university.logo_url ? <img src={university.logo_url} alt="" className="h-full w-full object-cover" /> : <Building2 size={18} />}</div><div><p className="font-semibold text-slate-800">{university.name}</p><p className="mt-1 text-xs font-medium text-slate-500">{university.code}</p></div></div></td>
               <td className="px-6 py-4"><p className="text-slate-700">{university.contact_person ?? "—"}</p><p className="mt-1 text-xs text-slate-500">{university.contact_email ?? university.phone_number ?? "No contact details"}</p></td>

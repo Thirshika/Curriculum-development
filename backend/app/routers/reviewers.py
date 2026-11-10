@@ -52,10 +52,11 @@ def list_reviewers(
     )
     if search:
         pattern = f"%{search.strip()}%"
-        query = query.join(University).filter(
+        query = query.join(University).outerjoin(College, User.college_id == College.id).filter(
             or_(
                 User.full_name.ilike(pattern),
                 User.email.ilike(pattern),
+                User.username.ilike(pattern),
                 University.name.ilike(pattern),
                 University.code.ilike(pattern),
                 College.name.ilike(pattern),

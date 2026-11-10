@@ -120,7 +120,7 @@ export default function RegulationsPage() {
     <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
         <h2 className="font-bold text-ink">Regulation documents</h2>
         <form onSubmit={(event) => { event.preventDefault(); void loadDocuments(); }} className="mt-3 space-y-2">
-          <label className="relative block"><Search size={15} className="absolute left-3 top-2.5 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Title or issuing body" className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm" /></label>
+          <label className="relative block"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Title or issuing body" className="search-input w-full rounded-lg border py-2 pr-3 text-sm" /></label>
           <div className="grid grid-cols-2 gap-2"><input aria-label="Filter by issuing body" value={issuer} onChange={(event) => setIssuer(event.target.value)} placeholder="Issuing body" className="min-w-0 rounded-lg border px-2 py-2 text-sm" /><input aria-label="Filter by year" value={year} onChange={(event) => setYear(event.target.value)} placeholder="Year" className="min-w-0 rounded-lg border px-2 py-2 text-sm" /><select aria-label="Filter by level" value={level} onChange={(event) => setLevel(event.target.value)} className="rounded-lg border px-2 py-2 text-sm"><option value="">UG/PG</option><option value="ug">UG</option><option value="pg">PG</option></select></div>
           <button className="w-full rounded-lg bg-slate-100 py-2 text-sm font-semibold text-slate-700">Search &amp; filter</button>
         </form>

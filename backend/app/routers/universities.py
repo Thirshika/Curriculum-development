@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -23,7 +23,25 @@ def list_universities(
     query = db.query(University).options(joinedload(University.reviewers))
     if search:
         pattern = f"%{search.strip()}%"
-        query = query.filter(or_(University.name.ilike(pattern), University.code.ilike(pattern)))
+        query = query.filter(
+            or_(
+                University.name.ilike(pattern),
+                University.code.ilike(pattern),
+                University.contact_person.ilike(pattern),
+                University.contact_email.ilike(pattern),
+                University.phone_number.ilike(pattern),
+                University.reviewers.any(
+                    and_(
+                        User.role == UserRole.REVIEWER,
+                        or_(
+                            User.full_name.ilike(pattern),
+                            User.email.ilike(pattern),
+                            User.username.ilike(pattern),
+                        ),
+                    )
+                ),
+            )
+        )
     universities = query.order_by(University.name).offset(offset).limit(limit).all()
     response = []
     for university in universities:

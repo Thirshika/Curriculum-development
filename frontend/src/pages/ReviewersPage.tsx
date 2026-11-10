@@ -62,6 +62,10 @@ export default function ReviewersPage() {
   useEffect(() => { void loadReviewers(); }, [loadReviewers]);
   useEffect(() => { void loadUniversities(); }, [loadUniversities]);
   useEffect(() => {
+    const timeout = window.setTimeout(() => setSearch(searchText.trim()), 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchText]);
+  useEffect(() => {
     api.get<College[]>("/colleges", { params: { limit: 100, status: "active" } })
       .then(({ data }) => setColleges(data))
       .catch((reason: unknown) => setError(getErrorMessage(reason)));
@@ -165,9 +169,9 @@ export default function ReviewersPage() {
     }
   }
 
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSearch(searchText.trim());
+  function clearSearch() {
+    setSearchText("");
+    setSearch("");
   }
 
   const availableUniversities = universities.filter((item) => item.status === "active");
@@ -222,12 +226,12 @@ export default function ReviewersPage() {
     </div>
 
     <section className="mt-7 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card">
-      <div className="flex flex-col justify-between gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:px-6"><div><h2 className="text-base font-bold text-ink">Reviewer accounts</h2><p className="mt-1 text-sm text-slate-500">Account status, university assignment, and password access.</p></div><form onSubmit={submitSearch} className="flex gap-2"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className="form-input h-10 w-full pl-9 sm:w-64" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search reviewers or universities" /></div><button className="rounded-xl border border-slate-200 px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50">Search</button></form></div>
+      <div className="flex flex-col justify-between gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:px-6"><div><h2 className="text-base font-bold text-ink">Reviewer accounts</h2><p className="mt-1 text-sm text-slate-500">Account status, university assignment, and password access.</p></div><div className="relative w-full sm:w-72"><Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input aria-label="Search reviewer accounts" className="form-input search-input search-input-clear h-10 w-full" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Reviewer, university, or college" />{searchText && <button type="button" aria-label="Clear search" onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={15} /></button>}</div></div>
       <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm">
         <thead className="bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wide text-slate-500"><tr><th className="px-6 py-3">Reviewer</th><th className="px-6 py-3">University / College</th><th className="px-6 py-3">Account status</th><th className="px-6 py-3">Password status</th><th className="px-6 py-3 text-right">Actions</th></tr></thead>
         <tbody className="divide-y divide-slate-100">
           {loading && <tr><td colSpan={5} className="px-6 py-12 text-center text-sm text-slate-500">Loading reviewer accounts…</td></tr>}
-          {!loading && reviewers.length === 0 && <tr><td colSpan={5} className="px-6 py-14 text-center"><div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-50 text-slate-400"><UsersRound size={20} /></div><p className="mt-3 text-sm font-semibold text-slate-700">No reviewer accounts found</p><p className="mt-1 text-xs text-slate-500">Add a university first, then provision its reviewer account.</p></td></tr>}
+          {!loading && reviewers.length === 0 && <tr><td colSpan={5} className="px-6 py-14 text-center"><div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-50 text-slate-400"><UsersRound size={20} /></div><p className="mt-3 text-sm font-semibold text-slate-700">No reviewer accounts found</p><p className="mt-1 text-xs text-slate-500">{search ? "Try a different search or clear the filter." : "Add a university first, then provision its reviewer account."}</p></td></tr>}
           {!loading && reviewers.map((reviewer) => <tr key={reviewer.id} className="hover:bg-slate-50/60">
             <td className="px-6 py-4"><p className="font-semibold text-slate-800">{reviewer.full_name}</p><p className="mt-1 text-xs text-slate-500">{reviewer.email}</p><p className="mt-1 text-[11px] font-medium text-navy">Login username: {reviewer.username}</p></td>
             <td className="px-6 py-4"><p className="font-medium text-slate-700">{reviewer.university_name}</p><p className="mt-1 text-xs text-slate-500">{reviewer.college_name ? `College: ${reviewer.college_name}` : `University-wide · ${reviewer.university_code}`}</p></td>

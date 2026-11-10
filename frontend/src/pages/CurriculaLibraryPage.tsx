@@ -213,7 +213,7 @@ export default function CurriculaLibraryPage() {
     <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
         <form className="flex gap-2" onSubmit={submitSearch}>
-          <label className="relative flex-1"><span className="sr-only">Search curricula</span><Search size={16} className="absolute left-3 top-3 text-slate-400" /><input className="form-input pl-9" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search title, programme, year" /></label>
+          <label className="relative flex-1"><span className="sr-only">Search curricula</span><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input className="form-input search-input" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search title, programme, year" /></label>
           <button className="rounded-lg bg-navy px-3 text-sm font-semibold text-white" aria-label="Search"><Search size={17} /></button>
         </form>
         <label className="mt-3 block text-xs font-medium text-slate-600">Status<select className="form-input mt-1.5" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label>

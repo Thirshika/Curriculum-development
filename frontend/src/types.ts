@@ -193,11 +193,74 @@ export interface Course {
   name: string;
   category: string;
   semester: number;
+  course_type: string;
   lecture_hours: string;
   tutorial_hours: string;
   practical_hours: string;
+  internal_marks: string;
+  external_marks: string;
+  total_marks: string;
   credits: string;
-  status: "active" | "archived";
+  status: "active" | "draft" | "archived";
+  programme_id: string | null;
+}
+
+export interface CourseLibraryPaper {
+  id?: string;
+  semester: number;
+  paper_code: string;
+  paper_title: string;
+  paper_type: string;
+  category: string;
+  lecture_hours: string;
+  tutorial_hours: string;
+  practical_hours: string;
+  internal_marks: string;
+  external_marks: string;
+  total_marks: string;
+  credits: string;
+}
+
+export interface CourseLibrarySemesterSummary {
+  semester: number;
+  total_papers: number;
+  total_credits: string;
+}
+
+export interface CourseCatalogueRow {
+  programme_id: string;
+  course_name: string;
+  course_code: string;
+  university_id: string;
+  university: string;
+  programme: string;
+  course_level: string;
+  duration_years: string;
+  total_semesters: number;
+  total_papers: number;
+  total_credits: string;
+  status: "draft" | "active" | "archived";
+}
+
+export interface CourseLibraryDetail extends CourseCatalogueRow {
+  configured: boolean;
+  faculty_school: string;
+  department: string;
+  description: string;
+  regulation_year: string;
+  academic_year: string;
+  effective_from: string | null;
+  effective_until: string | null;
+  semesters: CourseLibrarySemesterSummary[];
+  papers: CourseLibraryPaper[];
+}
+
+export interface CourseCreditDefault {
+  category: string;
+  default_credits: string | null;
+  minimum: string | null;
+  maximum: string | null;
+  source: string;
 }
 
 export interface CourseCreditCategory {

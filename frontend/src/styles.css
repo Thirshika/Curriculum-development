@@ -31,3 +31,12 @@ button { cursor: pointer; }
 }
 .form-input::placeholder { color: #a0a9b8; }
 .form-input:focus { border-color: #5277ad; box-shadow: 0 0 0 3px rgb(23 59 115 / 10%); }
+
+.search-input {
+  box-sizing: border-box;
+  padding-left: 44px;
+}
+
+.search-input-clear {
+  padding-right: 44px;
+}

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 import pymupdf
 from docx import Document as WordDocument
@@ -161,6 +163,128 @@ def test_unauthenticated_routes_are_protected(client):
     assert client.get("/api/reviewer/dashboard").status_code == 401
     assert client.get("/api/universities").status_code == 401
     assert client.get("/api/reviewers").status_code == 401
+
+
+def test_course_library_saves_programme_and_semester_papers(client):
+    headers = admin_headers(client)
+    university = client.get("/api/universities", headers=headers).json()[0]
+    programme_response = client.post(
+        "/api/programmes",
+        headers=headers,
+        json={
+            "university_id": university["id"],
+            "name": "Bachelor of Applied Science",
+            "degree_type": "B.Sc.",
+            "level": "ug",
+            "duration_years": 2,
+            "semester_count": 4,
+            "academic_year": "2026-2027",
+        },
+    )
+    assert programme_response.status_code == 201
+    programme_id = programme_response.json()["id"]
+    payload = {
+        "course_name": "Applied Science",
+        "course_code": "BAS-2026",
+        "faculty_school": "Science",
+        "department": "Applied Science",
+        "description": "A test course for the semester course library.",
+        "regulation_year": "2026",
+        "academic_year": "2026-2027",
+        "effective_from": "2026-08-01",
+        "effective_until": "2030-07-31",
+        "status": "active",
+        "papers": [{
+            "semester": 1,
+            "paper_code": "BAS101",
+            "paper_title": "Foundations",
+            "paper_type": "Theory",
+            "category": "Core",
+            "lecture_hours": 3,
+            "tutorial_hours": 1,
+            "practical_hours": 0,
+            "internal_marks": 20,
+            "external_marks": 80,
+            "credits": 4,
+        }],
+    }
+
+    saved = client.put(f"/api/courses/library/{programme_id}", headers=headers, json=payload)
+    assert saved.status_code == 200
+    assert saved.json()["total_papers"] == 1
+    assert Decimal(saved.json()["total_credits"]) == Decimal("4")
+    assert Decimal(saved.json()["papers"][0]["total_marks"]) == Decimal("100")
+
+    catalogue = client.get("/api/courses/library", headers=headers)
+    assert catalogue.status_code == 200
+    assert catalogue.json()[0]["course_code"] == "BAS-2026"
+    assert catalogue.json()[0]["total_semesters"] == 4
+
+    paper = saved.json()["papers"][0]
+    payload["papers"][0]["id"] = paper["id"]
+    payload["papers"][0]["internal_marks"] = 25
+    updated = client.put(f"/api/courses/library/{programme_id}", headers=headers, json=payload)
+    assert updated.status_code == 200
+    assert updated.json()["total_papers"] == 1
+    assert Decimal(updated.json()["papers"][0]["total_marks"]) == Decimal("105")
+
+    archived = client.delete(f"/api/courses/library/{programme_id}", headers=headers)
+    assert archived.status_code == 204
+    archived_catalogue = client.get(
+        "/api/courses/library",
+        headers=headers,
+        params={"status": "archived"},
+    )
+    assert archived_catalogue.status_code == 200
+    assert archived_catalogue.json()[0]["course_code"] == "BAS-2026"
+
+
+def test_course_library_rejects_papers_outside_programme_semesters(client):
+    headers = admin_headers(client)
+    university = client.get("/api/universities", headers=headers).json()[0]
+    programme = client.post(
+        "/api/programmes",
+        headers=headers,
+        json={
+            "university_id": university["id"],
+            "name": "Two Semester Programme",
+            "degree_type": "Diploma",
+            "level": "diploma",
+            "duration_years": 1,
+            "semester_count": 2,
+            "academic_year": "2026-2027",
+        },
+    )
+    assert programme.status_code == 201
+    payload = {
+        "course_name": "Two Semester Course",
+        "course_code": "TSC-1",
+        "faculty_school": "School",
+        "department": "Department",
+        "description": "A programme with two semesters.",
+        "regulation_year": "2026",
+        "academic_year": "2026-2027",
+        "status": "active",
+        "papers": [{
+            "semester": 3,
+            "paper_code": "TSC301",
+            "paper_title": "Out of range",
+            "paper_type": "Theory",
+            "category": "Core",
+            "lecture_hours": 3,
+            "tutorial_hours": 0,
+            "practical_hours": 0,
+            "internal_marks": 0,
+            "external_marks": 100,
+            "credits": 3,
+        }],
+    }
+    response = client.put(
+        f"/api/courses/library/{programme.json()['id']}",
+        headers=headers,
+        json=payload,
+    )
+    assert response.status_code == 422
 
 
 def admin_headers(client):
@@ -342,6 +466,44 @@ def test_university_management_validates_code_and_deactivates_reviewer(client):
     assert reactivated.status_code == 200
     reviewers = client.get("/api/reviewers", headers=headers).json()
     assert next(item for item in reviewers if item["university_id"] == abc["id"])["is_active"] is False
+
+
+def test_management_search_finds_university_wide_reviewers_and_contact_details(client):
+    headers = admin_headers(client)
+    client.post(
+        "/api/universities",
+        headers=headers,
+        json={
+            "name": "XYZ University",
+            "code": "XYZ001",
+            "contact_person": "Registrar",
+            "contact_email": "registrar@example.com",
+        },
+    )
+
+    reviewer_search = client.get(
+        "/api/reviewers",
+        headers=headers,
+        params={"search": "ABC Reviewer"},
+    )
+    assert reviewer_search.status_code == 200
+    assert [item["email"] for item in reviewer_search.json()] == ["reviewer@example.com"]
+
+    university_search = client.get(
+        "/api/universities",
+        headers=headers,
+        params={"search": "reviewer@example.com"},
+    )
+    assert university_search.status_code == 200
+    assert [item["code"] for item in university_search.json()] == ["ABC001"]
+
+    contact_search = client.get(
+        "/api/universities",
+        headers=headers,
+        params={"search": "Registrar"},
+    )
+    assert contact_search.status_code == 200
+    assert [item["code"] for item in contact_search.json()] == ["XYZ001"]
 
 
 def test_reviewer_provisioning_one_per_university_and_password_reset(client):

@@ -322,6 +322,11 @@ class Programme(Base):
     __tablename__ = "programmes"
     __table_args__ = (
         UniqueConstraint("university_id", "name", "academic_year", name="uq_programmes_university_name_year"),
+        UniqueConstraint(
+            "university_id",
+            "catalogue_course_code",
+            name="uq_programmes_university_catalogue_course_code",
+        ),
         Index("ix_programmes_university_status", "university_id", "status"),
     )
 
@@ -343,6 +348,15 @@ class Programme(Base):
     semester_count: Mapped[int] = mapped_column(Integer, nullable=False)
     academic_year: Mapped[str] = mapped_column(String(20), nullable=False)
     qualification_level: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    catalogue_course_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    catalogue_course_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    faculty_school: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    course_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    regulation_year: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    catalogue_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[ProgrammeStatus] = mapped_column(
         Enum(ProgrammeStatus, name="programme_status", values_callable=lambda values: [item.value for item in values]),
         default=ProgrammeStatus.ACTIVE,
@@ -368,6 +382,9 @@ class Course(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    programme_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("regulatory_documents.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -382,6 +399,12 @@ class Course(Base):
     lecture_hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False, default=0)
     tutorial_hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False, default=0)
     practical_hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False, default=0)
+    internal_marks: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    external_marks: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), nullable=False, default=Decimal("0"), server_default="0"
+    )
     prerequisites: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list)
     programme_ids: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")

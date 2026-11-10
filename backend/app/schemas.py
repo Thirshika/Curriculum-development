@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -413,6 +414,18 @@ class ProgrammeCreate(BaseModel):
     semester_count: int = Field(ge=1, le=24)
     academic_year: str = Field(pattern=r"^20\d{2}-20\d{2}$", min_length=9, max_length=9)
     qualification_level: str | None = Field(default=None, max_length=100)
+
+    @field_validator("academic_year", mode="before")
+    @classmethod
+    def normalize_academic_year(cls, value: str | None) -> str | None:
+        if isinstance(value, str):
+            value = value.strip()
+            match = re.match(r"^(20\d{2})-(\d{2})$", value)
+            if match:
+                prefix = match.group(1)[:2]
+                return f"{match.group(1)}-{prefix}{match.group(2)}"
+        return value
+
     @field_validator("name", "degree_type", "specialization", "qualification_level", mode="before")
     @classmethod
     def strip_programme_text(cls, value: str | None) -> str | None:
@@ -613,11 +626,16 @@ class CourseResponse(BaseModel):
     name: str
     category: str
     semester: int
+    course_type: str = "theory"
     lecture_hours: Decimal
     tutorial_hours: Decimal
     practical_hours: Decimal
+    internal_marks: Decimal = Decimal("0")
+    external_marks: Decimal = Decimal("0")
+    total_marks: Decimal = Decimal("0")
     credits: Decimal
     status: str
+    programme_id: uuid.UUID | None = None
 
 
 class CourseCategorySummary(BaseModel):
@@ -637,6 +655,132 @@ class CourseCreditSummary(BaseModel):
 class CourseImportResponse(BaseModel):
     imported: int
     errors: list[str]
+
+
+class CourseLibraryPaper(BaseModel):
+    id: uuid.UUID | None = None
+    semester: int = Field(ge=1, le=24)
+    paper_code: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    paper_title: str = Field(min_length=2, max_length=200)
+    paper_type: str = Field(min_length=2, max_length=80)
+    category: str = Field(min_length=2, max_length=100)
+    lecture_hours: Decimal = Field(ge=0, le=1000, max_digits=6, decimal_places=2)
+    tutorial_hours: Decimal = Field(ge=0, le=1000, max_digits=6, decimal_places=2)
+    practical_hours: Decimal = Field(ge=0, le=1000, max_digits=6, decimal_places=2)
+    internal_marks: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)
+    external_marks: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)
+    credits: Decimal = Field(gt=0, le=1000, max_digits=8, decimal_places=2)
+
+    @field_validator("paper_code")
+    @classmethod
+    def normalize_library_paper_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("paper_title", "paper_type", "category", mode="before")
+    @classmethod
+    def strip_library_paper_text(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CourseLibrarySave(BaseModel):
+    course_name: str = Field(min_length=2, max_length=240)
+    course_code: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    faculty_school: str = Field(min_length=2, max_length=200)
+    department: str = Field(min_length=2, max_length=200)
+    description: str = Field(min_length=2, max_length=10000)
+    regulation_year: str = Field(min_length=2, max_length=20)
+    academic_year: str = Field(pattern=r"^20\d{2}-20\d{2}$", min_length=9, max_length=9)
+    effective_from: date | None = None
+    effective_until: date | None = None
+    status: Literal["draft", "active"]
+    papers: list[CourseLibraryPaper] = Field(max_length=500)
+
+    @field_validator("academic_year", mode="before")
+    @classmethod
+    def normalize_academic_year(cls, value: str | None) -> str | None:
+        if isinstance(value, str):
+            value = value.strip()
+            match = re.match(r"^(20\d{2})-(\d{2})$", value)
+            if match:
+                prefix = match.group(1)[:2]
+                return f"{match.group(1)}-{prefix}{match.group(2)}"
+        return value
+
+    @field_validator("course_code")
+    @classmethod
+    def normalize_library_course_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("course_name", "faculty_school", "department", "description", "regulation_year", mode="before")
+    @classmethod
+    def strip_library_course_text(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_effective_dates(self):
+        if self.effective_from and self.effective_until and self.effective_until < self.effective_from:
+            raise ValueError("Effective Until cannot be earlier than Effective From.")
+        return self
+
+
+class CourseLibraryPaperResponse(BaseModel):
+    id: uuid.UUID
+    semester: int
+    paper_code: str
+    paper_title: str
+    paper_type: str
+    category: str
+    lecture_hours: Decimal
+    tutorial_hours: Decimal
+    practical_hours: Decimal
+    internal_marks: Decimal
+    external_marks: Decimal
+    total_marks: Decimal
+    credits: Decimal
+
+
+class CourseLibrarySemesterSummary(BaseModel):
+    semester: int
+    total_papers: int
+    total_credits: Decimal
+
+
+class CourseCatalogueRow(BaseModel):
+    programme_id: uuid.UUID
+    course_name: str
+    course_code: str
+    university_id: uuid.UUID
+    university: str
+    programme: str
+    course_level: str
+    duration_years: Decimal
+    total_semesters: int
+    total_papers: int
+    total_credits: Decimal
+    status: str
+
+
+class CourseLibraryDetail(CourseCatalogueRow):
+    configured: bool
+    faculty_school: str
+    department: str
+    description: str
+    regulation_year: str
+    academic_year: str
+    effective_from: date | None
+    effective_until: date | None
+    semesters: list[CourseLibrarySemesterSummary]
+    papers: list[CourseLibraryPaperResponse]
+
+
+class CourseCreditDefaultResponse(BaseModel):
+    category: str
+    default_credits: Decimal | None
+    minimum: Decimal | None
+    maximum: Decimal | None
+    source: str
+
+
 class StructuredSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
