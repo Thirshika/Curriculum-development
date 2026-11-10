@@ -27,7 +27,6 @@ import type {
   CourseCatalogueRow,
   CourseLibraryDetail,
   CourseLibraryPaper,
-  CreditTableRow,
   Programme,
   University,
 } from "../types";
@@ -147,100 +146,25 @@ export function getCreditPointsFromCreditTable(categoryName: string, semester: n
   };
 }
 
-const defaultSamplePapers: PaperDraft[] = [
-  {
-    semester: 1,
-    paper_code: "BSC101",
-    paper_title: "Programming in C",
-    paper_type: "Core",
-    category: "Core",
-    lecture_hours: "3",
-    tutorial_hours: "0",
-    practical_hours: "2",
-    internal_marks: "25",
-    external_marks: "75",
-    total_marks: "100",
-    credits: "4",
-  },
-  {
-    semester: 1,
-    paper_code: "BSC102",
-    paper_title: "Data Structures",
-    paper_type: "Core",
-    category: "Core",
-    lecture_hours: "3",
-    tutorial_hours: "1",
-    practical_hours: "0",
-    internal_marks: "25",
-    external_marks: "75",
-    total_marks: "100",
-    credits: "4",
-  },
-  {
-    semester: 1,
-    paper_code: "BSC103",
-    paper_title: "Computer Networks",
-    paper_type: "Core",
-    category: "Core",
-    lecture_hours: "3",
-    tutorial_hours: "0",
-    practical_hours: "2",
-    internal_marks: "25",
-    external_marks: "75",
-    total_marks: "100",
-    credits: "4",
-  },
-  {
-    semester: 1,
-    paper_code: "BSC104",
-    paper_title: "Web Technologies",
-    paper_type: "Elective",
-    category: "Elective",
-    lecture_hours: "3",
-    tutorial_hours: "1",
-    practical_hours: "0",
-    internal_marks: "25",
-    external_marks: "75",
-    total_marks: "100",
-    credits: "3",
-  },
-  {
-    semester: 1,
-    paper_code: "BSC105",
-    paper_title: "Machine Learning",
-    paper_type: "Elective",
-    category: "Elective",
-    lecture_hours: "3",
-    tutorial_hours: "1",
-    practical_hours: "0",
-    internal_marks: "25",
-    external_marks: "75",
-    total_marks: "100",
-    credits: "4",
-  },
-];
+const defaultSamplePapers: PaperDraft[] = [];
 
 const initialBlankForm = (): CourseForm => ({
-  course_name: "B.Sc Computer Science",
-  course_code: "BSC-CS-001",
+  course_name: "",
+  course_code: "",
   course_level: "UG",
   university_id: "",
-  faculty_school: "School of Computing",
+  faculty_school: "",
   course_type: "Regular",
-  department: "Computer Science",
+  department: "",
   programme_id: "",
-  programme_code: "BSC-CS",
-  description: "Comprehensive course on computer science and programming.",
-  regulation_year: "2024",
-  academic_year: "2024-25",
-  effective_from: "2024-08-01",
+  programme_code: "",
+  description: "",
+  regulation_year: "",
+  academic_year: "",
+  effective_from: "",
   effective_until: "",
-  status: "active",
-  objectives: [
-    "Provide a strong foundation in computer science and modern programming concepts.",
-    "Develop problem-solving skills using algorithms and data structures.",
-    "Prepare students for industry roles in software engineering and system design.",
-  ],
+  status: "draft",
+  objectives: [],
 });
 
 const blankPaper = (semester: number): PaperDraft => {
@@ -301,10 +225,9 @@ export default function CourseLibraryPage() {
   const [activeTab, setActiveTab] = useState<"designer" | "catalogue" | "import">("designer");
 
   const [form, setForm] = useState<CourseForm>(initialBlankForm);
-  const [papers, setPapers] = useState<PaperDraft[]>(defaultSamplePapers);
+  const [papers, setPapers] = useState<PaperDraft[]>([]);
   const [semesterCount, setSemesterCount] = useState<number>(6);
   const [activeSemester, setActiveSemester] = useState<number>(1);
-  const [creditRows, setCreditRows] = useState<CreditTableRow[]>([]);
 
   // Paper Add/Edit Modal
   const [paperModalOpen, setPaperModalOpen] = useState(false);
@@ -322,7 +245,6 @@ export default function CourseLibraryPage() {
   const [search, setSearch] = useState("");
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [error, setError] = useState("");
-  const [creditError, setCreditError] = useState("");
   const [notice, setNotice] = useState("");
 
   const activeUniversities = useMemo(
@@ -349,17 +271,6 @@ export default function CourseLibraryPage() {
     () => getCreditPointsFromCreditTable(paperForm.category || "Core (CC)", activeSemester),
     [paperForm.category, activeSemester]
   );
-
-  const creditsByCategory = useMemo(() => {
-    const totals = new Map<string, number>();
-    papers.forEach((paper) => {
-      if (paper.category) {
-        const key = paper.category.toLowerCase();
-        totals.set(key, (totals.get(key) ?? 0) + (Number(paper.credits) || 0));
-      }
-    });
-    return totals;
-  }, [papers]);
 
   const activeSemesterPapers = useMemo(
     () => papers.filter((p) => p.semester === activeSemester),
@@ -447,43 +358,6 @@ export default function CourseLibraryPage() {
     void loadCatalogue();
   }, [loadCatalogue]);
 
-  // Load Credit Table rules
-  useEffect(() => {
-    let active = true;
-    async function loadCredits() {
-      setCreditRows([]);
-      setCreditError("");
-      const prog = programmes.find((p) => p.id === form.programme_id);
-      if (!prog) return;
-      if (prog.level !== "ug" && prog.level !== "pg") {
-        setCreditError("Credit table rules are configured for UG and PG programmes.");
-        return;
-      }
-      try {
-        const duration = Number(prog.duration_years);
-        const { data } = await api.get<{ rows: CreditTableRow[] }>("/credit-table", {
-          params: {
-            programme_level: prog.level,
-            duration_years:
-              Number.isInteger(duration) && (duration === 3 || duration === 4)
-                ? duration
-                : undefined,
-          },
-        });
-        if (active)
-          setCreditRows(
-            data.rows.filter((row) => row.scope_type === "category" && row.category)
-          );
-      } catch (reason) {
-        if (active) setCreditError(errorMessage(reason));
-      }
-    }
-    void loadCredits();
-    return () => {
-      active = false;
-    };
-  }, [form.programme_id, programmes]);
-
   function setFormField<K extends keyof CourseForm>(key: K, value: CourseForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -535,8 +409,14 @@ export default function CourseLibraryPage() {
   }
 
   function startCreate() {
+    setPreview(null);
     setForm(initialBlankForm());
-    setPapers(defaultSamplePapers);
+    setPapers([]);
+    setPaperForm(blankPaper(1));
+    setEditingPaperIndex(null);
+    setPaperModalOpen(false);
+    setManageMenuOpen(false);
+    setCsvFile(null);
     setSemesterCount(6);
     setActiveSemester(1);
     setActiveTab("designer");
@@ -1767,67 +1647,6 @@ export default function CourseLibraryPage() {
                 ))}
               </div>
             </section>
-
-            {/* Credit Table Validation Check Summary */}
-            {creditRows.length > 0 && (
-              <section className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <Sparkles size={18} className="text-[#103b83]" />
-                  <h3 className="text-sm font-bold text-[#102b5b]">Credit Table Compliance Check</h3>
-                </div>
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 font-semibold">Category</th>
-                        <th className="px-3 py-2 font-semibold">Allocated Credits</th>
-                        <th className="px-3 py-2 font-semibold">Configured Minimum</th>
-                        <th className="px-3 py-2 font-semibold">Configured Maximum</th>
-                        <th className="px-3 py-2 font-semibold">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {creditRows.map((row) => {
-                        const allocated =
-                          creditsByCategory.get((row.category ?? "").toLowerCase()) ?? 0;
-                        const under = row.minimum !== null && allocated < Number(row.minimum);
-                        const over = row.maximum !== null && allocated > Number(row.maximum);
-                        return (
-                          <tr key={row.category}>
-                            <td className="px-3 py-2 font-medium">{row.category}</td>
-                            <td className="px-3 py-2 font-bold text-[#103b83]">
-                              {allocated.toFixed(2)}
-                            </td>
-                            <td className="px-3 py-2">{row.minimum ?? "—"}</td>
-                            <td className="px-3 py-2">{row.maximum ?? "—"}</td>
-                            <td
-                              className={`px-3 py-2 font-semibold ${
-                                under || over ? "text-amber-700" : "text-emerald-700"
-                              }`}
-                            >
-                              {under
-                                ? "Below minimum"
-                                : over
-                                ? "Above maximum"
-                                : "✓ Within limits"}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            )}
-
-            {creditError && (
-              <p
-                role="status"
-                className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
-              >
-                {creditError}
-              </p>
-            )}
 
             {/* Bottom Actions Bar */}
             <div

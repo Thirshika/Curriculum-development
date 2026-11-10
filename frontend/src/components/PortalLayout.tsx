@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { BookOpenCheck, Building2, ChevronDown, CircleHelp, ClipboardCheck, FileStack, GraduationCap, Library, LogOut, Settings, ShieldCheck, Sparkles, UserRound, UsersRound, Workflow, ChartNoAxesCombined, History, Bell, MessageSquareText, UserCircle, WalletCards } from "lucide-react";
+import { BookOpenCheck, Building2, ChevronDown, CircleHelp, ClipboardCheck, FileStack, Library, LogOut, Settings, ShieldCheck, Sparkles, UserRound, UsersRound, Workflow, ChartNoAxesCombined, History, Bell, MessageSquareText, UserCircle, WalletCards } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import type { UserRole } from "../types";
@@ -18,8 +18,7 @@ export default function PortalLayout({ role, children }: { role: UserRole; child
     { to: "/admin/regulations", label: "Regulatory Knowledge Base", icon: FileStack, end: false },
     { to: "/admin/credit-table", label: "Credit Table", icon: WalletCards, end: false },
     { to: "/admin/courses", label: "Course Library", icon: Library, end: false },
-    { to: "/admin/curricula/design", label: "Curriculum Designer", icon: GraduationCap, end: false },
-    { to: "/admin/curricula/generate", label: "AI Syllabus Generator", icon: Sparkles, end: false },
+    { to: "/admin/curricula/generate", label: "AI Curriculum Generator", icon: Sparkles, end: false },
     { to: "/admin/reviews", label: "Approval Workflow", icon: Workflow, end: false },
     { to: "/admin/reports", label: "Reports & Exports", icon: ChartNoAxesCombined, end: false },
     { to: "/admin/curricula", label: "Version History", icon: History, end: false },

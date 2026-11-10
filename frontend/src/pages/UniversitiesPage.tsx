@@ -1,9 +1,10 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
-import { Building2, Check, ChevronLeft, ChevronRight, Edit3, Plus, Search, X } from "lucide-react";
+import { FormEvent, Fragment, useCallback, useEffect, useState } from "react";
+import { Building2, Check, ChevronDown, ChevronLeft, ChevronRight, Edit3, GraduationCap, Plus, Search, X } from "lucide-react";
 import axios from "axios";
+import { Link } from "react-router-dom";
 import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
-import type { University, UniversityFormData } from "../types";
+import type { Programme, University, UniversityFormData } from "../types";
 
 const emptyForm: UniversityFormData = {
   name: "",
@@ -22,6 +23,10 @@ function getErrorMessage(error: unknown) {
 
 export default function UniversitiesPage() {
   const [universities, setUniversities] = useState<University[]>([]);
+  const [programmesByUniversity, setProgrammesByUniversity] = useState<Record<string, Programme[]>>({});
+  const [expandedUniversityId, setExpandedUniversityId] = useState<string | null>(null);
+  const [loadingProgrammesFor, setLoadingProgrammesFor] = useState<string | null>(null);
+  const [programmeErrors, setProgrammeErrors] = useState<Record<string, string>>({});
   const [searchText, setSearchText] = useState("");
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
@@ -137,6 +142,32 @@ export default function UniversitiesPage() {
     setOffset(0);
   }
 
+  async function toggleProgrammes(universityId: string) {
+    if (expandedUniversityId === universityId) {
+      setExpandedUniversityId(null);
+      return;
+    }
+
+    setExpandedUniversityId(universityId);
+    if (programmesByUniversity[universityId]) return;
+
+    setLoadingProgrammesFor(universityId);
+    setProgrammeErrors((current) => ({ ...current, [universityId]: "" }));
+    try {
+      const { data } = await api.get<Programme[]>("/programmes", {
+        params: { university_id: universityId, limit: 100 },
+      });
+      setProgrammesByUniversity((current) => ({ ...current, [universityId]: data }));
+    } catch (reason) {
+      setProgrammeErrors((current) => ({
+        ...current,
+        [universityId]: String(getErrorMessage(reason)),
+      }));
+    } finally {
+      setLoadingProgrammesFor((current) => current === universityId ? null : current);
+    }
+  }
+
   return <PortalLayout role="admin">
     <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
       <div><p className="text-sm font-medium text-navy">ADMIN WORKSPACE</p><h1 className="mt-2 text-[30px] font-bold tracking-tight text-ink">University management</h1><p className="mt-2 text-sm text-slate-500">Register universities and manage their profile and access status.</p></div>
@@ -169,13 +200,37 @@ export default function UniversitiesPage() {
           <tbody className="divide-y divide-slate-100">
             {loading && <tr><td colSpan={5} className="px-6 py-12 text-center text-sm text-slate-500">Loading universities…</td></tr>}
             {!loading && universities.length === 0 && <tr><td colSpan={5} className="px-6 py-14 text-center"><div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-50 text-slate-400"><Building2 size={20} /></div><p className="mt-3 text-sm font-semibold text-slate-700">No universities found</p><p className="mt-1 text-xs text-slate-500">{search ? "Try a different search or clear the filter." : "Create the first university to get started."}</p></td></tr>}
-            {!loading && universities.map((university) => <tr key={university.id} className="hover:bg-slate-50/60">
-              <td className="px-6 py-4"><div className="flex items-center gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-blue-50 text-navy">{university.logo_url ? <img src={university.logo_url} alt="" className="h-full w-full object-cover" /> : <Building2 size={18} />}</div><div><p className="font-semibold text-slate-800">{university.name}</p><p className="mt-1 text-xs font-medium text-slate-500">{university.code}</p></div></div></td>
+            {!loading && universities.map((university) => <Fragment key={university.id}>
+              <tr className="hover:bg-slate-50/60">
+              <td className="px-6 py-4"><div className="flex items-center gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-blue-50 text-navy">{university.logo_url ? <img src={university.logo_url} alt="" className="h-full w-full object-cover" /> : <Building2 size={18} />}</div><div><p className="font-semibold text-slate-800">{university.name}</p><p className="mt-1 text-xs font-medium text-slate-500">{university.code}</p></div><button type="button" onClick={() => void toggleProgrammes(university.id)} aria-expanded={expandedUniversityId === university.id} aria-label={`${expandedUniversityId === university.id ? "Hide" : "Show"} programmes for ${university.name}`} className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-navy hover:bg-blue-50"><GraduationCap size={15} />Programmes<ChevronDown size={14} className={`transition-transform ${expandedUniversityId === university.id ? "rotate-180" : ""}`} /></button></div></td>
               <td className="px-6 py-4"><p className="text-slate-700">{university.contact_person ?? "—"}</p><p className="mt-1 text-xs text-slate-500">{university.contact_email ?? university.phone_number ?? "No contact details"}</p></td>
               <td className="px-6 py-4">{university.reviewer_id ? <><p className="font-medium text-slate-700">{university.reviewer_name}</p><p className="mt-1 text-xs text-slate-500">{university.reviewer_email}</p></> : <span className="text-xs text-slate-400">Not assigned</span>}</td>
               <td className="px-6 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${university.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{university.status}</span></td>
               <td className="px-6 py-4"><div className="flex justify-end gap-2"><button onClick={() => startEdit(university)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"><Edit3 size={14} />Edit</button><button onClick={() => void toggleStatus(university)} className={`rounded-lg px-2.5 py-2 text-xs font-semibold ${university.status === "active" ? "border border-rose-100 text-rose-600 hover:bg-rose-50" : "border border-emerald-100 text-emerald-700 hover:bg-emerald-50"}`}>{university.status === "active" ? "Deactivate" : "Activate"}</button></div></td>
-            </tr>)}
+              </tr>
+              {expandedUniversityId === university.id && <tr className="bg-slate-50/70">
+                <td colSpan={5} className="px-6 py-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-bold text-slate-800">Programmes at {university.name}</h3>
+                      <Link to="/admin/programmes" className="text-xs font-semibold text-navy hover:underline">Manage programmes</Link>
+                    </div>
+                    {loadingProgrammesFor === university.id && <p className="text-sm text-slate-500">Loading programmes…</p>}
+                    {programmeErrors[university.id] && <p role="alert" className="text-sm text-rose-700">{programmeErrors[university.id]}</p>}
+                    {!loadingProgrammesFor && !programmeErrors[university.id] && programmesByUniversity[university.id]?.length === 0 && <p className="text-sm text-slate-500">No programmes registered for this university yet.</p>}
+                    {!programmeErrors[university.id] && programmesByUniversity[university.id]?.length > 0 && <ul className="divide-y divide-slate-100">
+                      {programmesByUniversity[university.id].map((programme) => <li key={programme.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5 first:pt-0 last:pb-0">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-800">{programme.name}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{programme.degree_type}{programme.specialization ? ` · ${programme.specialization}` : ""} · {programme.level.toUpperCase()} · {programme.duration_years} years · {programme.semester_count} semesters</p>
+                        </div>
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${programme.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{programme.status}</span>
+                      </li>)}
+                    </ul>}
+                  </div>
+                </td>
+              </tr>}
+            </Fragment>)}
           </tbody>
         </table>
       </div>

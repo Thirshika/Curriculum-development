@@ -1,17 +1,21 @@
 import uuid
+from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import ValidationError
 
 from app.config import settings
 from app.curriculum_generation import build_credit_distribution, generate_curriculum_with_openai, validate_curriculum
 from app.dependencies import DbSession, require_role
 from app.models import CurriculumGenerationJob, Programme, User, UserRole
+from app.regulatory import extract_pdf_pages
+from app.routers.courses import programme_courses
 from app.schemas import CurriculumDraftContent, CurriculumGenerationResponse, GeneratedCurriculumContent
 
 router = APIRouter(prefix="/api/ai-generation", tags=["ai-generation"])
 AdminUser = Annotated[User, Depends(require_role(UserRole.ADMIN))]
+MAX_SAMPLE_TEXT_CHARS = 30_000
 
 
 def programme_query(db: DbSession, programme_id: uuid.UUID) -> Programme | None:
@@ -37,6 +41,33 @@ def response_content(curriculum: GeneratedCurriculumContent) -> dict:
     return payload
 
 
+def validate_course_library(
+    curriculum: GeneratedCurriculumContent,
+    course_library: list[dict],
+) -> None:
+    expected_courses = {course["course_code"].casefold(): course for course in course_library}
+    generated_courses = [
+        (semester.semester_number, course)
+        for semester in curriculum.semesters
+        for course in semester.courses
+    ]
+    generated_codes = [course.course_code.casefold() for _, course in generated_courses]
+    if len(generated_codes) != len(set(generated_codes)) or set(generated_codes) != set(expected_courses):
+        raise ValueError("Generated courses must exactly match the courses configured in Course Library.")
+
+    for semester_number, course in generated_courses:
+        source = expected_courses[course.course_code.casefold()]
+        if (
+            semester_number != source["semester"]
+            or course.title != source["title"]
+            or course.category != source["category"]
+            or course.credits != Decimal(source["credits"])
+        ):
+            raise ValueError(
+                f"Generated details for {course.course_code} must match Course Library, including its semester and credits."
+            )
+
+
 @router.post(
     "/programmes/{programme_id}",
     response_model=CurriculumGenerationResponse,
@@ -46,6 +77,7 @@ async def generate_programme_curriculum(
     programme_id: uuid.UUID,
     db: DbSession,
     admin: AdminUser,
+    sample_curriculum: UploadFile | None = File(default=None),
 ) -> CurriculumGenerationResponse:
     if not settings.openai_api_key:
         raise HTTPException(
@@ -57,6 +89,38 @@ async def generate_programme_curriculum(
         raise HTTPException(status_code=404, detail="Programme not found")
     if programme.status != "active":
         raise HTTPException(status_code=409, detail="Activate this programme before generating a curriculum.")
+    sample_curriculum_text = None
+    if sample_curriculum is not None:
+        if not sample_curriculum.filename or sample_curriculum.filename.rsplit(".", 1)[-1].lower() != "pdf":
+            raise HTTPException(status_code=415, detail="The sample curriculum must be a PDF file.")
+        sample_pdf = await sample_curriculum.read(settings.regulatory_max_upload_bytes + 1)
+        if len(sample_pdf) > settings.regulatory_max_upload_bytes:
+            raise HTTPException(status_code=413, detail="The sample curriculum PDF exceeds the upload size limit.")
+        if not sample_pdf.startswith(b"%PDF-"):
+            raise HTTPException(status_code=415, detail="The uploaded sample is not a valid PDF.")
+        try:
+            pages = extract_pdf_pages(sample_pdf)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        sample_curriculum_text = "\n".join(pages).strip()
+        if not sample_curriculum_text:
+            raise HTTPException(
+                status_code=422,
+                detail="No selectable text was found in the sample PDF. Upload a text-based PDF.",
+            )
+        sample_curriculum_text = sample_curriculum_text[:MAX_SAMPLE_TEXT_CHARS]
+
+    library_papers = [
+        course
+        for course in programme_courses(db, programme)
+        if course.status in {"active", "draft"}
+    ]
+    if not library_papers:
+        raise HTTPException(
+            status_code=409,
+            detail="Add courses to this programme in Course Library before generating its curriculum.",
+        )
+
     job = CurriculumGenerationJob(
         programme_id=programme.id,
         created_by=admin.id,
@@ -78,9 +142,25 @@ async def generate_programme_curriculum(
         "academic_year": programme.academic_year,
         "qualification_level": programme.qualification_level,
     }
+    course_library = [
+        {
+            "course_code": course.course_code,
+            "title": course.name,
+            "category": course.category,
+            "semester": course.semester,
+            "credits": str(course.credits),
+        }
+        for course in library_papers
+    ]
     try:
-        generated = await generate_curriculum_with_openai(model=job.model, programme=programme_input)
+        generated = await generate_curriculum_with_openai(
+            model=job.model,
+            programme=programme_input,
+            course_library=course_library,
+            sample_curriculum=sample_curriculum_text,
+        )
         validate_curriculum(generated, semester_count=programme.semester_count)
+        validate_course_library(generated, course_library)
         final_content = CurriculumDraftContent.model_validate(response_content(generated))
     except HTTPException as exc:
         job.status = "failed"

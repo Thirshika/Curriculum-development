@@ -15,7 +15,6 @@ import AdminFeedbackPage from "./pages/AdminFeedbackPage";
 import RegulationsPage from "./pages/RegulationsPage";
 import CreditTablePage from "./pages/CreditTablePage";
 import CourseLibraryPage from "./pages/CourseLibraryPage";
-import CurriculumDesignerPage from "./pages/CurriculumDesignerPage";
 import ReportsPage from "./pages/ReportsPage";
 import SystemSettingsPage from "./pages/SystemSettingsPage";
 import ReviewerWorkspacePage from "./pages/ReviewerWorkspacePage";
@@ -48,7 +47,6 @@ export default function App() {
       <Route path="/admin/reviewers" element={<ReviewersPage />} />
       <Route path="/admin/programmes" element={<ProgrammesPage />} />
       <Route path="/admin/curricula/generate" element={<CurriculumGenerationPage />} />
-      <Route path="/admin/curricula/design" element={<CurriculumDesignerPage />} />
       <Route path="/admin/curricula" element={<CurriculaLibraryPage />} />
       <Route path="/admin/reviews" element={<AdminFeedbackPage />} />
       <Route path="/admin/reports" element={<ReportsPage />} />
