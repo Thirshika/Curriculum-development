@@ -3,10 +3,10 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
-from sqlalchemy.orm import joinedload, load_only
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.dependencies import DbSession, require_role
-from app.models import CreditTableOverride, RegulatoryDocument, RegulatoryDocumentStatus, RegulatoryRule, RuleVerificationStatus, User, UserRole
+from app.models import CreditTableOverride, Programme, RegulatoryDocument, RegulatoryDocumentStatus, RegulatoryRule, RuleVerificationStatus, User, UserRole
 from app.schemas import CreditTableOverrideCreate, CreditTableResponse, CreditTableRow, CreditTableSource
 
 router = APIRouter(prefix="/api/credit-table", tags=["credit-table"])
@@ -322,6 +322,16 @@ def _degree_credit_table(
         )
     rows.sort(key=lambda row: (row.scope_type == "total", (row.category or "").casefold()))
     return CreditTableResponse(programme_level=programme_level, rows=rows)
+
+
+def get_programme_credit_table(db: Session, programme: Programme) -> CreditTableResponse | None:
+    programme_level = programme.level.value
+    if programme_level not in {"ug", "pg"}:
+        return None
+    duration = int(programme.duration_years) if programme.duration_years % 1 == 0 else None
+    if duration in {3, 4}:
+        return _degree_credit_table(db, programme_level, duration)
+    return get_credit_table(db, programme_level)
 
 
 @router.get("", response_model=CreditTableResponse)

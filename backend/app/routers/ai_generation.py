@@ -11,6 +11,7 @@ from app.dependencies import DbSession, require_role
 from app.models import CurriculumGenerationJob, Programme, User, UserRole
 from app.regulatory import extract_pdf_pages
 from app.routers.courses import programme_courses
+from app.routers.credit_table import get_programme_credit_table
 from app.schemas import CurriculumDraftContent, CurriculumGenerationResponse, GeneratedCurriculumContent
 
 router = APIRouter(prefix="/api/ai-generation", tags=["ai-generation"])
@@ -152,11 +153,18 @@ async def generate_programme_curriculum(
         }
         for course in library_papers
     ]
+    credit_table_response = get_programme_credit_table(db, programme)
+    credit_table = (
+        credit_table_response.model_dump(mode="json")
+        if credit_table_response is not None
+        else None
+    )
     try:
         generated = await generate_curriculum_with_openai(
             model=job.model,
             programme=programme_input,
             course_library=course_library,
+            credit_table=credit_table,
             sample_curriculum=sample_curriculum_text,
         )
         validate_curriculum(generated, semester_count=programme.semester_count)

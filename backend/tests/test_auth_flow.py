@@ -194,39 +194,129 @@ def test_course_library_saves_programme_and_semester_papers(client):
         "effective_from": "2026-08-01",
         "effective_until": "2030-07-31",
         "status": "active",
-        "papers": [{
-            "semester": 1,
-            "paper_code": "BAS101",
-            "paper_title": "Foundations",
-            "paper_type": "Theory",
-            "category": "Core",
-            "lecture_hours": 3,
-            "tutorial_hours": 1,
-            "practical_hours": 0,
-            "internal_marks": 20,
-            "external_marks": 80,
-            "credits": 4,
-        }],
+        "papers": [
+            {
+                "semester": 1,
+                "paper_code": "BAS101",
+                "paper_title": "Foundations",
+                "paper_type": "Theory",
+                "category": "Core",
+                "lecture_hours": 3,
+                "tutorial_hours": 1,
+                "practical_hours": 0,
+                "internal_marks": 20,
+                "external_marks": 80,
+                "credits": 4,
+            },
+            {
+                "semester": 1,
+                "paper_code": "BAS102",
+                "paper_title": "Minor paper",
+                "paper_type": "Theory",
+                "category": "Minor (MI)",
+                "lecture_hours": 3,
+                "tutorial_hours": 1,
+                "practical_hours": 0,
+                "internal_marks": 20,
+                "external_marks": 80,
+                "credits": 0,
+            },
+        ],
     }
+
+    for semester, expected_credits in enumerate([0, 4, 4, 4, 4, 4], start=1):
+        credit_default = client.get(
+            "/api/courses/credits/default",
+            headers=headers,
+            params={
+                "programme_id": programme_id,
+                "category": "Minor (MI)",
+                "semester": semester,
+            },
+        )
+        assert credit_default.status_code == 200
+        assert Decimal(credit_default.json()["default_credits"]) == Decimal(
+            str(expected_credits)
+        )
+
+    unconfigured_semester_credit = client.get(
+        "/api/courses/credits/default",
+        headers=headers,
+        params={
+            "programme_id": programme_id,
+            "category": "Minor (MI)",
+            "semester": 7,
+        },
+    )
+    assert unconfigured_semester_credit.status_code == 200
+    assert unconfigured_semester_credit.json()["default_credits"] is None
+    assert tuple(
+        unconfigured_semester_credit.json()[field]
+        for field in ("lecture_hours", "tutorial_hours", "practical_hours")
+    ) == (None, None, None)
+
+    expected_ltp = {
+        "Core (CC)": (3, 1, 0),
+        "Minor (MI)": (3, 1, 0),
+        "Multidisciplinary (MDC)": (3, 0, 2),
+        "AEC": (3, 0, 0),
+        "SEC": (1, 0, 4),
+        "VAC": (2, 0, 1),
+        "Internship (INT)": (0, 0, 8),
+    }
+    category_semesters = {
+        "Core (CC)": (None, 1),
+        "Minor (MI)": (1, 2),
+        "Multidisciplinary (MDC)": (4, 1),
+        "AEC": (3, 1),
+        "SEC": (1, 3),
+        "VAC": (3, 1),
+        "Internship (INT)": (1, 6),
+    }
+    for paper_category, (empty_semester, populated_semester) in category_semesters.items():
+        requests = [(populated_semester, expected_ltp[paper_category])]
+        if empty_semester is not None:
+            requests.append((empty_semester, (0, 0, 0)))
+        for semester, hours in requests:
+            ltp_default = client.get(
+                "/api/courses/credits/default",
+                headers=headers,
+                params={
+                    "programme_id": programme_id,
+                    "category": paper_category,
+                    "semester": semester,
+                },
+            )
+            assert ltp_default.status_code == 200
+            assert tuple(
+                Decimal(ltp_default.json()[field])
+                for field in ("lecture_hours", "tutorial_hours", "practical_hours")
+            ) == tuple(Decimal(str(hour)) for hour in hours)
 
     saved = client.put(f"/api/courses/library/{programme_id}", headers=headers, json=payload)
     assert saved.status_code == 200
-    assert saved.json()["total_papers"] == 1
+    assert saved.json()["total_papers"] == 2
     assert Decimal(saved.json()["total_credits"]) == Decimal("4")
     assert Decimal(saved.json()["papers"][0]["total_marks"]) == Decimal("100")
+    assert Decimal(saved.json()["papers"][1]["credits"]) == Decimal("0")
 
     catalogue = client.get("/api/courses/library", headers=headers)
     assert catalogue.status_code == 200
     assert catalogue.json()[0]["course_code"] == "BAS-2026"
     assert catalogue.json()[0]["total_semesters"] == 4
 
-    paper = saved.json()["papers"][0]
+    paper = next(item for item in saved.json()["papers"] if item["paper_code"] == "BAS101")
+    minor_paper = next(item for item in saved.json()["papers"] if item["paper_code"] == "BAS102")
     payload["papers"][0]["id"] = paper["id"]
+    payload["papers"][1]["id"] = minor_paper["id"]
     payload["papers"][0]["internal_marks"] = 25
     updated = client.put(f"/api/courses/library/{programme_id}", headers=headers, json=payload)
     assert updated.status_code == 200
-    assert updated.json()["total_papers"] == 1
-    assert Decimal(updated.json()["papers"][0]["total_marks"]) == Decimal("105")
+    assert updated.json()["total_papers"] == 2
+    updated_core = next(
+        item for item in updated.json()["papers"] if item["paper_code"] == "BAS101"
+    )
+    assert Decimal(updated_core["total_marks"]) == Decimal("105")
 
     archived = client.delete(f"/api/courses/library/{programme_id}", headers=headers)
     assert archived.status_code == 204

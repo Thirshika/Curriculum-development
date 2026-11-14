@@ -258,6 +258,9 @@ export interface CourseLibraryDetail extends CourseCatalogueRow {
 export interface CourseCreditDefault {
   category: string;
   default_credits: string | null;
+  lecture_hours: string | null;
+  tutorial_hours: string | null;
+  practical_hours: string | null;
   minimum: string | null;
   maximum: string | null;
   source: string;

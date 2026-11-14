@@ -669,7 +669,7 @@ class CourseLibraryPaper(BaseModel):
     practical_hours: Decimal = Field(ge=0, le=1000, max_digits=6, decimal_places=2)
     internal_marks: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)
     external_marks: Decimal = Field(ge=0, le=10000, max_digits=8, decimal_places=2)
-    credits: Decimal = Field(gt=0, le=1000, max_digits=8, decimal_places=2)
+    credits: Decimal = Field(ge=0, le=1000, max_digits=8, decimal_places=2)
 
     @field_validator("paper_code")
     @classmethod
@@ -776,6 +776,9 @@ class CourseLibraryDetail(CourseCatalogueRow):
 class CourseCreditDefaultResponse(BaseModel):
     category: str
     default_credits: Decimal | None
+    lecture_hours: Decimal | None
+    tutorial_hours: Decimal | None
+    practical_hours: Decimal | None
     minimum: Decimal | None
     maximum: Decimal | None
     source: str

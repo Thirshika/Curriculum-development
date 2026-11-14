@@ -17,7 +17,6 @@ import {
   Settings,
   Sparkles,
   Trash2,
-  Upload,
   X,
 } from "lucide-react";
 import axios from "axios";
@@ -25,6 +24,7 @@ import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
 import type {
   CourseCatalogueRow,
+  CourseCreditDefault,
   CourseLibraryDetail,
   CourseLibraryPaper,
   Programme,
@@ -118,7 +118,7 @@ export const SEMESTER_DISTRIBUTION_RULES: SemesterDistributionRule[] = [
   },
 ];
 
-export function getCreditPointsFromCreditTable(categoryName: string, semester: number) {
+function getSemesterCategoryAllocation(categoryName: string, semester: number) {
   const norm = categoryName.trim().toLowerCase();
   const rule = SEMESTER_DISTRIBUTION_RULES.find((r) =>
     r.aliases.some((alias) => norm === alias || norm.includes(alias))
@@ -126,22 +126,17 @@ export function getCreditPointsFromCreditTable(categoryName: string, semester: n
 
   if (rule) {
     const semIndex = Math.max(0, semester - 1);
-    const paperCountInSem = rule.papers[semIndex] ?? (rule.creditsPerPaper ? 1 : 0);
-    const totalCreditsInSem = paperCountInSem * rule.creditsPerPaper;
+    const paperCountInSem = rule.papers[semIndex] ?? 0;
     return {
-      credits: rule.creditsPerPaper,
       categoryDisplay: rule.category,
       paperCountInSem,
-      totalCreditsInSem,
       hasRule: true,
     };
   }
 
   return {
-    credits: 4,
     categoryDisplay: categoryName,
-    paperCountInSem: 1,
-    totalCreditsInSem: 4,
+    paperCountInSem: 0,
     hasRule: false,
   };
 }
@@ -168,20 +163,19 @@ const initialBlankForm = (): CourseForm => ({
 });
 
 const blankPaper = (semester: number): PaperDraft => {
-  const defaultRule = getCreditPointsFromCreditTable("Core (CC)", semester);
   return {
     semester,
     paper_code: "",
     paper_title: "",
     paper_type: "Core",
     category: "Core (CC)",
-    lecture_hours: "3",
-    tutorial_hours: "0",
-    practical_hours: "2",
+    lecture_hours: "",
+    tutorial_hours: "",
+    practical_hours: "",
     internal_marks: "25",
     external_marks: "75",
     total_marks: "100",
-    credits: String(defaultRule.credits),
+    credits: "",
   };
 };
 
@@ -222,7 +216,7 @@ export default function CourseLibraryPage() {
   const [universities, setUniversities] = useState<University[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [catalogue, setCatalogue] = useState<CourseCatalogueRow[]>([]);
-  const [activeTab, setActiveTab] = useState<"designer" | "catalogue" | "import">("designer");
+  const [activeTab, setActiveTab] = useState<"designer" | "catalogue">("designer");
 
   const [form, setForm] = useState<CourseForm>(initialBlankForm);
   const [papers, setPapers] = useState<PaperDraft[]>([]);
@@ -233,6 +227,9 @@ export default function CourseLibraryPage() {
   const [paperModalOpen, setPaperModalOpen] = useState(false);
   const [editingPaperIndex, setEditingPaperIndex] = useState<number | null>(null);
   const [paperForm, setPaperForm] = useState<PaperDraft>(blankPaper(1));
+  const [creditDefault, setCreditDefault] = useState<CourseCreditDefault | null>(null);
+  const [creditDefaultLoading, setCreditDefaultLoading] = useState(false);
+  const [applyFetchedCreditDefault, setApplyFetchedCreditDefault] = useState(false);
 
   // Manage papers menu
   const [manageMenuOpen, setManageMenuOpen] = useState(false);
@@ -243,7 +240,6 @@ export default function CourseLibraryPage() {
   const [preview, setPreview] = useState<CourseLibraryDetail | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
-  const [csvFile, setCsvFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -268,8 +264,8 @@ export default function CourseLibraryPage() {
   }, [programmes, form.university_id]);
 
   const activeModalCreditRule = useMemo(
-    () => getCreditPointsFromCreditTable(paperForm.category || "Core (CC)", activeSemester),
-    [paperForm.category, activeSemester]
+    () => getSemesterCategoryAllocation(paperForm.category || "Core (CC)", activeSemester),
+    [paperForm.category, activeSemester],
   );
 
   const activeSemesterPapers = useMemo(
@@ -281,6 +277,66 @@ export default function CourseLibraryPage() {
     () => totalCredits(activeSemesterPapers),
     [activeSemesterPapers]
   );
+
+  useEffect(() => {
+    if (!paperModalOpen || !form.programme_id || !paperForm.category) {
+      setCreditDefault(null);
+      return;
+    }
+
+    let active = true;
+    setCreditDefault(null);
+    setCreditDefaultLoading(true);
+    async function loadCreditDefault() {
+      try {
+        const { data } = await api.get<CourseCreditDefault>("/courses/credits/default", {
+          params: {
+            programme_id: form.programme_id,
+            category: paperForm.category,
+            semester: activeSemester,
+          },
+        });
+        if (!active) return;
+        setCreditDefault(data);
+        if (applyFetchedCreditDefault) {
+          setPaperForm((current) => ({
+            ...current,
+            ...(data.default_credits !== null
+              ? { credits: data.default_credits }
+              : {}),
+            ...(data.lecture_hours !== null
+              ? { lecture_hours: data.lecture_hours }
+              : {}),
+            ...(data.tutorial_hours !== null
+              ? { tutorial_hours: data.tutorial_hours }
+              : {}),
+            ...(data.practical_hours !== null
+              ? { practical_hours: data.practical_hours }
+              : {}),
+          }));
+        }
+      } catch (reason) {
+        if (active) {
+          setCreditDefault(null);
+          setError(errorMessage(reason));
+        }
+      } finally {
+        if (active) {
+          setCreditDefaultLoading(false);
+          setApplyFetchedCreditDefault(false);
+        }
+      }
+    }
+    void loadCreditDefault();
+    return () => {
+      active = false;
+    };
+  }, [
+    activeSemester,
+    form.programme_id,
+    paperForm.category,
+    paperModalOpen,
+  ]);
 
   // Close manage menu on outside click
   useEffect(() => {
@@ -329,12 +385,12 @@ export default function CourseLibraryPage() {
             (u) => u.name.toLowerCase().includes("abc") || u.status === "active"
           );
           if (abc) {
+            const matchedProg = progRes.data.find(
+              (p) =>
+                p.university_id === abc.id &&
+                p.name.toLowerCase().includes("b.sc")
+            );
             setForm((prev) => {
-              const matchedProg = progRes.data.find(
-                (p) =>
-                  p.university_id === abc.id &&
-                  p.name.toLowerCase().includes("b.sc")
-              );
               return {
                 ...prev,
                 university_id: abc.id,
@@ -342,6 +398,7 @@ export default function CourseLibraryPage() {
                 programme_code: matchedProg ? "BSC-CS" : prev.programme_code,
               };
             });
+            if (matchedProg) setSemesterCount(matchedProg.semester_count);
           }
         }
       } catch (reason) {
@@ -416,7 +473,6 @@ export default function CourseLibraryPage() {
     setEditingPaperIndex(null);
     setPaperModalOpen(false);
     setManageMenuOpen(false);
-    setCsvFile(null);
     setSemesterCount(6);
     setActiveSemester(1);
     setActiveTab("designer");
@@ -432,11 +488,35 @@ export default function CourseLibraryPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function addSemester() {
+  async function addSemester() {
+    if (!form.programme_id) {
+      setError("Select a programme before adding a semester.");
+      return;
+    }
+    if (semesterCount >= 24) {
+      setError("A programme cannot have more than 24 semesters.");
+      return;
+    }
+
     const nextSemester = semesterCount + 1;
-    setSemesterCount(nextSemester);
-    setActiveSemester(nextSemester);
-    setNotice(`Semester ${nextSemester} added.`);
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const { data } = await api.patch<Programme>(`/programmes/${form.programme_id}`, {
+        semester_count: nextSemester,
+      });
+      setProgrammes((current) =>
+        current.map((programme) => programme.id === data.id ? data : programme)
+      );
+      setSemesterCount(data.semester_count);
+      setActiveSemester(data.semester_count);
+      setNotice(`Semester ${data.semester_count} added.`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handleDeleteSemester(sem: number) {
@@ -466,6 +546,7 @@ export default function CourseLibraryPage() {
   function openAddPaper() {
     setEditingPaperIndex(null);
     setPaperForm(blankPaper(activeSemester));
+    setApplyFetchedCreditDefault(true);
     setPaperModalOpen(true);
   }
 
@@ -473,6 +554,7 @@ export default function CourseLibraryPage() {
     const index = papers.indexOf(paper);
     setEditingPaperIndex(index);
     setPaperForm({ ...paper });
+    setApplyFetchedCreditDefault(false);
     setPaperModalOpen(true);
   }
 
@@ -546,30 +628,57 @@ export default function CourseLibraryPage() {
   }
 
   function handleModalCategoryChange(selectedCategory: string) {
-    const ruleInfo = getCreditPointsFromCreditTable(selectedCategory, activeSemester);
     setPaperForm((prev) => ({
       ...prev,
       category: selectedCategory,
-      credits: String(ruleInfo.credits),
     }));
+    setApplyFetchedCreditDefault(true);
   }
 
   async function autoFillCreditsFromTable() {
     setManageMenuOpen(false);
-    let updatedCount = 0;
-    const updated = papers.map((paper) => {
-      if (paper.semester !== activeSemester) return paper;
-      const ruleInfo = getCreditPointsFromCreditTable(paper.category, activeSemester);
-      if (ruleInfo.credits && String(ruleInfo.credits) !== paper.credits) {
+    if (!form.programme_id) {
+      setError("Select a programme before fetching its Credit Table defaults.");
+      return;
+    }
+
+    try {
+      const activePapers = papers.filter((paper) => paper.semester === activeSemester);
+      const categories = [...new Set(activePapers.map((paper) => paper.category))];
+      const defaults = await Promise.all(
+        categories.map(async (paperCategory) => {
+          const { data } = await api.get<CourseCreditDefault>("/courses/credits/default", {
+            params: {
+              programme_id: form.programme_id,
+              category: paperCategory,
+              semester: activeSemester,
+            },
+          });
+          return [paperCategory, data.default_credits] as const;
+        }),
+      );
+      const creditsByCategory = new Map(defaults);
+      let updatedCount = 0;
+      const updated = papers.map((paper) => {
+        const defaultCredits = creditsByCategory.get(paper.category);
+        if (
+          paper.semester !== activeSemester ||
+          defaultCredits === null ||
+          defaultCredits === undefined ||
+          String(defaultCredits) === paper.credits
+        ) {
+          return paper;
+        }
         updatedCount++;
-        return { ...paper, credits: String(ruleInfo.credits) };
-      }
-      return paper;
-    });
-    setPapers(updated);
-    setNotice(
-      `Credits updated from Credit Table semester distribution for Semester ${activeSemester} (${updatedCount} paper(s) updated).`
-    );
+        return { ...paper, credits: String(defaultCredits) };
+      });
+      setPapers(updated);
+      setNotice(
+        `Credits updated from the selected programme's Credit Table for Semester ${activeSemester} (${updatedCount} paper(s) updated).`,
+      );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
   }
 
   // Objectives handling
@@ -749,40 +858,6 @@ export default function CourseLibraryPage() {
     }
   }
 
-  async function importCsv(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!csvFile) {
-      setError("Choose a CSV file to import.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const body = new FormData();
-      body.append("file", csvFile);
-      const { data } = await api.post<{ imported: number; errors: string[] }>(
-        "/courses/import",
-        body,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-        }
-      );
-      setNotice(
-        `${data.imported} course paper(s) imported${
-          data.errors.length ? `; ${data.errors.length} row(s) need correction.` : "."
-        }`
-      );
-      setCsvFile(null);
-      await loadCatalogue();
-      setActiveTab("catalogue");
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const inputClass =
     "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-[#164a9f] focus:ring-2 focus:ring-[#164a9f]/10";
 
@@ -824,18 +899,6 @@ export default function CourseLibraryPage() {
                 }`}
               >
                 Catalogue ({catalogue.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("import")}
-                className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 transition ${
-                  activeTab === "import"
-                    ? "bg-white text-[#164a9f] shadow-xs font-bold"
-                    : "hover:text-slate-900"
-                }`}
-              >
-                <Upload size={13} />
-                Import CSV
               </button>
             </div>
 
@@ -1346,8 +1409,10 @@ export default function CourseLibraryPage() {
 
                 <button
                   type="button"
-                  onClick={addSemester}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#103b83] px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#0c2f68] transition"
+                  onClick={() => void addSemester()}
+                  disabled={saving || !form.programme_id || semesterCount >= 24}
+                  title={semesterCount >= 24 ? "A programme cannot have more than 24 semesters." : undefined}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#103b83] px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#0c2f68] transition disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Plus size={15} />
                   Add Semester
@@ -1817,45 +1882,6 @@ export default function CourseLibraryPage() {
           </section>
         )}
 
-        {/* ===================== VIEW 3: IMPORT CSV ===================== */}
-        {activeTab === "import" && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
-            <h2 className="text-base font-bold text-[#102b5b]">Import Course Papers from CSV</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Upload legacy or bulk course papers in standard CSV format.
-            </p>
-
-            <form onSubmit={(e) => void importCsv(e)} className="mt-4 max-w-lg space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Choose CSV File</label>
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={(e) => setCsvFile(e.target.files?.[0] ?? null)}
-                  className="mt-1 block w-full rounded-xl border border-slate-200 p-2 text-xs"
-                />
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={saving || !csvFile}
-                  className="rounded-xl bg-[#103b83] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#0c2f68] disabled:opacity-50"
-                >
-                  {saving ? "Importing…" : "Upload & Import"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("catalogue")}
-                  className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </section>
-        )}
-
         {/* ===================== MODAL: ADD / EDIT PAPER ===================== */}
         {paperModalOpen && (
           <div
@@ -1971,7 +1997,11 @@ export default function CourseLibraryPage() {
                       <span>Credit Table Rule (Semester {activeSemester}):</span>
                     </div>
                     <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-black text-[#103b83]">
-                      {activeModalCreditRule.credits} Credits / Paper
+                      {creditDefaultLoading
+                        ? "Loading Credit Table…"
+                        : creditDefault?.default_credits !== null && creditDefault?.default_credits !== undefined
+                        ? `${creditDefault.default_credits} Credits / Paper`
+                        : "No fixed credit value"}
                     </span>
                   </div>
                   <p className="mt-1.5 text-[11px] text-slate-600 leading-relaxed">
@@ -1979,16 +2009,27 @@ export default function CourseLibraryPage() {
                       <>
                         In Semester {activeSemester}, <strong>{activeModalCreditRule.categoryDisplay}</strong> allocates{" "}
                         <strong>{activeModalCreditRule.paperCountInSem} paper{activeModalCreditRule.paperCountInSem > 1 ? "s" : ""}</strong> with{" "}
-                        <strong>{activeModalCreditRule.totalCreditsInSem} total credit points</strong> in the Credit Table.
+                        <strong>
+                          {creditDefault?.default_credits !== null && creditDefault?.default_credits !== undefined
+                            ? Number(creditDefault.default_credits) * activeModalCreditRule.paperCountInSem
+                            : "—"} total credit points
+                        </strong>{" "}
+                        in the Credit Table.
                         <span className="block mt-0.5 font-semibold text-[#103b83]">
-                          → Distributed as exactly <strong>{activeModalCreditRule.credits} credit points per paper</strong>.
+                          → Distributed as exactly{" "}
+                          <strong>{creditDefault?.default_credits ?? "—"} credit points per paper</strong>.
                         </span>
                       </>
                     ) : (
                       <>
-                        Category <strong>{activeModalCreditRule.categoryDisplay}</strong> standard allocation is{" "}
-                        <strong>{activeModalCreditRule.credits} credit points</strong> per paper according to Credit Table rules.
+                        Category <strong>{activeModalCreditRule.categoryDisplay}</strong> has no papers allocated in Semester {activeSemester} in the Credit Table.{" "}
+                        {creditDefault?.default_credits !== null && creditDefault?.default_credits !== undefined
+                          ? <>Its matching value is <strong>{creditDefault.default_credits} credits</strong>.</>
+                          : "No fixed credit value is configured; enter the approved value."}
                       </>
+                    )}
+                    {creditDefault?.source && (
+                      <span className="mt-1 block text-slate-500">Source: {creditDefault.source}</span>
                     )}
                   </p>
                 </div>
@@ -2051,7 +2092,7 @@ export default function CourseLibraryPage() {
                     <input
                       required
                       type="number"
-                      min="0.5"
+                      min="0"
                       max="100"
                       step="0.5"
                       value={paperForm.credits}

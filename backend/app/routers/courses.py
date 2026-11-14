@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.dependencies import DbSession, require_role
 from app.models import Course, Programme, User, UserRole
-from app.routers.credit_table import _degree_credit_table, get_credit_table
+from app.routers.credit_table import get_programme_credit_table
 from app.schemas import (
     CourseCatalogueRow,
     CourseCategorySummary,
@@ -247,6 +247,32 @@ SEMESTER_CREDIT_DISTRIBUTION: dict[str, tuple[Decimal, list[int]]] = {
     "research project": (Decimal("4"), [0, 0, 0, 0, 0, 1]),
 }
 
+COURSE_LTP_DISTRIBUTION: dict[str, tuple[Decimal, Decimal, Decimal]] = {
+    "core (cc)": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "core": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "major": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "major (core)": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "minor (mi)": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "minor": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "minor stream": (Decimal("3"), Decimal("1"), Decimal("0")),
+    "multidisciplinary (mdc)": (Decimal("3"), Decimal("0"), Decimal("2")),
+    "multidisciplinary": (Decimal("3"), Decimal("0"), Decimal("2")),
+    "mdc": (Decimal("3"), Decimal("0"), Decimal("2")),
+    "aec": (Decimal("3"), Decimal("0"), Decimal("0")),
+    "ability enhancement": (Decimal("3"), Decimal("0"), Decimal("0")),
+    "ability enhancement courses (aec)": (Decimal("3"), Decimal("0"), Decimal("0")),
+    "sec": (Decimal("1"), Decimal("0"), Decimal("4")),
+    "skill enhancement": (Decimal("1"), Decimal("0"), Decimal("4")),
+    "skill enhancement courses (sec)": (Decimal("1"), Decimal("0"), Decimal("4")),
+    "skill-based": (Decimal("1"), Decimal("0"), Decimal("4")),
+    "vac": (Decimal("2"), Decimal("0"), Decimal("1")),
+    "value added": (Decimal("2"), Decimal("0"), Decimal("1")),
+    "value-added": (Decimal("2"), Decimal("0"), Decimal("1")),
+    "internship (int)": (Decimal("0"), Decimal("0"), Decimal("8")),
+    "internship": (Decimal("0"), Decimal("0"), Decimal("8")),
+    "research project": (Decimal("0"), Decimal("0"), Decimal("8")),
+}
+
 
 @router.get("/credits/default", response_model=CourseCreditDefaultResponse)
 def get_course_credit_default(
@@ -261,12 +287,9 @@ def get_course_credit_default(
         raise HTTPException(status_code=404, detail="Programme not found")
     if programme.level.value not in {"ug", "pg"}:
         raise HTTPException(status_code=422, detail="The existing Credit Table supports UG and PG programmes.")
-    duration = int(programme.duration_years) if programme.duration_years % 1 == 0 else None
-    table = (
-        _degree_credit_table(db, programme.level.value, duration)
-        if duration in {3, 4}
-        else get_credit_table(db, programme.level.value)
-    )
+    table = get_programme_credit_table(db, programme)
+    if table is None:
+        raise HTTPException(status_code=422, detail="The existing Credit Table supports UG and PG programmes.")
     row = next(
         (
             item for item in table.rows
@@ -278,32 +301,43 @@ def get_course_credit_default(
     )
     default_credits = None
     source = None
-    if row and row.credit_value:
+    sem_rule = SEMESTER_CREDIT_DISTRIBUTION.get(category.strip().casefold())
+    ltp_per_paper = COURSE_LTP_DISTRIBUTION.get(
+        category.strip().casefold(),
+        (None, None, None),
+    )
+    if sem_rule and semester and 1 <= semester <= len(sem_rule[1]):
+        paper_count = sem_rule[1][semester - 1]
+        default_credits = sem_rule[0] if paper_count > 0 else Decimal("0")
+        if paper_count == 0:
+            ltp_per_paper = tuple(
+                Decimal("0") if hours is not None else None
+                for hours in ltp_per_paper
+            )
+        total_credits = paper_count * default_credits
+        source = (
+            f"Credit Table semester distribution (Semester {semester}): "
+            f"{paper_count} paper(s) = {total_credits} credits total → "
+            f"{default_credits} cr/paper"
+        )
+    elif sem_rule and semester:
+        ltp_per_paper = (None, None, None)
+
+    if default_credits is None and row and row.credit_value is not None:
         try:
             candidate = Decimal(row.credit_value)
-            if candidate > 0:
+            if candidate >= 0:
                 default_credits = candidate
                 source = "Credit Table"
         except InvalidOperation:
             pass
 
-    if default_credits is None:
-        sem_rule = SEMESTER_CREDIT_DISTRIBUTION.get(category.strip().casefold())
-        if sem_rule:
-            default_credits = sem_rule[0]
-            if semester and 1 <= semester <= len(sem_rule[1]):
-                paper_cnt = sem_rule[1][semester - 1]
-                tot = paper_cnt * default_credits
-                source = (
-                    f"Credit Table semester distribution (Semester {semester}): "
-                    f"{paper_cnt} paper(s) = {tot} credits total → {default_credits} cr/paper"
-                )
-            else:
-                source = f"Credit Table semester distribution ({default_credits} cr/paper)"
-
     return CourseCreditDefaultResponse(
         category=category.strip(),
         default_credits=default_credits,
+        lecture_hours=ltp_per_paper[0],
+        tutorial_hours=ltp_per_paper[1],
+        practical_hours=ltp_per_paper[2],
         minimum=row.minimum if row else None,
         maximum=row.maximum if row else None,
         source=(

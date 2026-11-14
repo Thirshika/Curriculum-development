@@ -1,22 +1,43 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, SlidersHorizontal, Trash2 } from "lucide-react";
 import axios from "axios";
 import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
-import type { CreditTableRow, CreditTableSource } from "../types";
+import type {
+  CourseCatalogueRow,
+  CourseLibraryDetail,
+  CreditTableRow,
+  CreditTableSource,
+} from "../types";
 
 type Level = "ug" | "pg";
 type TableView = "limits" | "distribution";
 const semesterLabels = ["I", "II", "III", "IV", "V", "VI"];
 const semesterDistribution = [
-  { category: "Core (CC)", creditsPerPaper: 4, papers: [2, 2, 2, 3, 3, 3] },
-  { category: "Minor (MI)", creditsPerPaper: 4, papers: [0, 1, 1, 1, 1, 2] },
-  { category: "Multidisciplinary (MDC)", creditsPerPaper: 3, papers: [1, 1, 1, 0, 0, 0] },
-  { category: "AEC", creditsPerPaper: 3, papers: [2, 2, 0, 0, 0, 0] },
-  { category: "SEC", creditsPerPaper: 3, papers: [0, 0, 1, 1, 1, 0] },
-  { category: "VAC", creditsPerPaper: 3, papers: [1, 1, 0, 0, 0, 0] },
-  { category: "Internship (INT)", creditsPerPaper: 4, papers: [0, 0, 0, 0, 0, 1] },
+  { category: "Core (CC)", creditsPerPaper: 4, ltpPerPaper: [3, 1, 0], papers: [2, 2, 2, 3, 3, 3] },
+  { category: "Minor (MI)", creditsPerPaper: 4, ltpPerPaper: [3, 1, 0], papers: [0, 1, 1, 1, 1, 2] },
+  { category: "Multidisciplinary (MDC)", creditsPerPaper: 3, ltpPerPaper: [3, 0, 2], papers: [1, 1, 1, 0, 0, 0] },
+  { category: "AEC", creditsPerPaper: 3, ltpPerPaper: [3, 0, 0], papers: [2, 2, 0, 0, 0, 0] },
+  { category: "SEC", creditsPerPaper: 3, ltpPerPaper: [1, 0, 4], papers: [0, 0, 1, 1, 1, 0] },
+  { category: "VAC", creditsPerPaper: 3, ltpPerPaper: [2, 0, 1], papers: [1, 1, 0, 0, 0, 0] },
+  { category: "Internship (INT)", creditsPerPaper: 4, ltpPerPaper: [0, 0, 8], papers: [0, 0, 0, 0, 0, 1] },
 ];
+function normalizeCourseCategory(category: string): string | null {
+  const normalized = category.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized === "cc" || normalized.includes("core")) return "core";
+  if (normalized === "mi" || normalized.includes("minor")) return "minor";
+  if (normalized.includes("mdc") || normalized.includes("multidisciplinary")) return "mdc";
+  if (normalized.includes("aec") || normalized.includes("abilityenhancement")) return "aec";
+  if (normalized === "sec" || normalized.includes("skillenhancement")) return "sec";
+  if (normalized === "vac" || normalized.includes("valueadded")) return "vac";
+  if (
+    normalized === "int" ||
+    normalized.includes("internship") ||
+    normalized.includes("project") ||
+    normalized.includes("research")
+  ) return "internship";
+  return null;
+}
 const broadCategoryLabels: Record<string, string> = {
   Major: "Major (Core)",
   Minor: "Minor Stream",
@@ -45,6 +66,11 @@ export default function CreditTablePage() {
   const [durationYears, setDurationYears] = useState<3 | 4>(3);
   const [tableView, setTableView] = useState<TableView>("limits");
   const [rows, setRows] = useState<CreditTableRow[]>([]);
+  const [courseLibrary, setCourseLibrary] = useState<CourseCatalogueRow[]>([]);
+  const [selectedProgrammeId, setSelectedProgrammeId] = useState("");
+  const [selectedLibraryDetail, setSelectedLibraryDetail] = useState<CourseLibraryDetail | null>(null);
+  const [selectedCategoryKey, setSelectedCategoryKey] = useState("");
+  const [fetchingCategory, setFetchingCategory] = useState(false);
   const [category, setCategory] = useState("");
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,8 +78,33 @@ export default function CreditTablePage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const supportsSemesterDistribution = level === "ug" && durationYears === 3;
+  const matchingLibraryProgrammes = useMemo(
+    () => courseLibrary.filter(
+      (course) =>
+        course.course_level.toLowerCase() === level &&
+        Number(course.duration_years) === durationYears,
+    ),
+    [courseLibrary, durationYears, level],
+  );
+  const selectedCategoryPapers = useMemo(
+    () =>
+      (selectedLibraryDetail?.papers ?? []).filter(
+        (paper) => normalizeCourseCategory(paper.category) === selectedCategoryKey,
+      ),
+    [selectedCategoryKey, selectedLibraryDetail],
+  );
   const semesterTotals = semesterLabels.map((_, semesterIndex) =>
     semesterDistribution.reduce((total, row) => total + row.papers[semesterIndex] * row.creditsPerPaper, 0),
+  );
+  const semesterLtpTotals = semesterLabels.map((_, semesterIndex) =>
+    semesterDistribution.reduce<[number, number, number]>(
+      (total, row) => [
+        total[0] + row.ltpPerPaper[0] * row.papers[semesterIndex],
+        total[1] + row.ltpPerPaper[1] * row.papers[semesterIndex],
+        total[2] + row.ltpPerPaper[2] * row.papers[semesterIndex],
+      ],
+      [0, 0, 0],
+      ),
   );
   const totalDistributionCredits = semesterTotals.reduce((total, credits) => total + credits, 0);
 
@@ -67,6 +118,62 @@ export default function CreditTablePage() {
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setLoading(false); }
   }, [durationYears, level]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadCourseLibrary() {
+      try {
+        const { data } = await api.get<CourseCatalogueRow[]>("/courses/library");
+        if (active) {
+          setCourseLibrary(data);
+        }
+      } catch (reason) {
+        if (active) setError(errorMessage(reason));
+      }
+    }
+    void loadCourseLibrary();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setSelectedProgrammeId((current) =>
+      matchingLibraryProgrammes.some((programme) => programme.programme_id === current)
+        ? current
+        : matchingLibraryProgrammes[0]?.programme_id ?? "",
+    );
+  }, [matchingLibraryProgrammes]);
+
+  useEffect(() => {
+    if (!selectedProgrammeId) {
+      setSelectedLibraryDetail(null);
+      return;
+    }
+    let active = true;
+    setSelectedLibraryDetail(null);
+    async function loadSelectedLibrary() {
+      try {
+        const { data } = await api.get<CourseLibraryDetail>(
+          `/courses/library/${selectedProgrammeId}`,
+        );
+        if (active) {
+          setSelectedLibraryDetail(data);
+        }
+      } catch (reason) {
+        if (active) {
+          setSelectedLibraryDetail(null);
+          setError(errorMessage(reason));
+        }
+      }
+    }
+    void loadSelectedLibrary();
+    const timer = window.setInterval(() => void loadSelectedLibrary(), 10000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [selectedProgrammeId]);
 
   useEffect(() => { void loadTable(); }, [loadTable]);
   useEffect(() => {
@@ -93,6 +200,24 @@ export default function CreditTablePage() {
     finally { setBusy(false); }
   }
 
+  async function fetchCategoryPapers(categoryName: string) {
+    const categoryKey = normalizeCourseCategory(categoryName);
+    if (!selectedProgrammeId || !categoryKey) return;
+    setSelectedCategoryKey(categoryKey);
+    setFetchingCategory(true);
+    setError("");
+    try {
+      const { data } = await api.get<CourseLibraryDetail>(
+        `/courses/library/${selectedProgrammeId}`,
+      );
+      setSelectedLibraryDetail(data);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setFetchingCategory(false);
+    }
+  }
+
   async function deleteOverride(id: string) {
     setBusy(true);
     setError("");
@@ -111,7 +236,147 @@ export default function CreditTablePage() {
     {error && <div role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
     <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
       <div className="border-b border-slate-100 px-5 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-bold text-ink">{tableView === "distribution" && supportsSemesterDistribution ? "Semester-wise paper count and credit distribution · 3-year UG" : `${durationYears}-year full degree · ${level.toUpperCase()}`}</h2><div className="flex flex-wrap items-center gap-3"><div className="inline-flex rounded-lg bg-slate-100 p-1" role="group" aria-label="Degree duration"><button type="button" aria-pressed={durationYears === 3} onClick={() => { setDurationYears(3); setTableView("limits"); }} className={`rounded-md px-3 py-2 text-sm font-semibold ${durationYears === 3 ? "bg-white text-navy shadow-sm" : "text-slate-600"}`}>3-year full degree</button><button type="button" aria-pressed={durationYears === 4} onClick={() => { setDurationYears(4); setTableView("limits"); }} className={`rounded-md px-3 py-2 text-sm font-semibold ${durationYears === 4 ? "bg-white text-navy shadow-sm" : "text-slate-600"}`}>4-year full degree</button></div><div className="inline-flex rounded-lg bg-slate-100 p-1" role="group" aria-label="Credit table view"><button type="button" aria-pressed={tableView === "limits"} onClick={() => setTableView("limits")} className={`rounded-md px-3 py-2 text-sm font-semibold ${tableView === "limits" ? "bg-white text-navy shadow-sm" : "text-slate-600"}`}>Credit limits</button><button type="button" aria-pressed={tableView === "distribution"} disabled={!supportsSemesterDistribution} title={supportsSemesterDistribution ? undefined : "Semester-wise distribution is available for 3-year UG"} onClick={() => setTableView("distribution")} className={`rounded-md px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${tableView === "distribution" && supportsSemesterDistribution ? "bg-white text-navy shadow-sm" : "text-slate-600"}`}>Sem-wise distribution</button></div></div></div>{!supportsSemesterDistribution && <p className="mt-2 text-xs text-slate-500">Semester-wise distribution is available for 3-year UG.</p>}</div>
-      {tableView === "distribution" && supportsSemesterDistribution ? <div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th scope="col" className="border border-slate-200 px-4 py-3">Course category</th>{semesterLabels.map((semester) => <th scope="col" key={semester} className="border border-slate-200 px-4 py-3">Sem {semester}</th>)}<th scope="col" className="border border-slate-200 px-4 py-3">Total credits</th></tr></thead><tbody>{semesterDistribution.map((row) => { const totalCredits = row.papers.reduce((total, papers) => total + papers, 0) * row.creditsPerPaper; return <tr key={row.category}><th scope="row" className="border border-slate-200 px-4 py-3 font-semibold text-slate-800">{row.category}</th>{row.papers.map((papers, index) => <td key={index} className="border border-slate-200 px-4 py-3">{papers * row.creditsPerPaper}</td>)}<td className="border border-slate-200 px-4 py-3">{totalCredits}</td></tr>; })}<tr className="bg-slate-50 font-bold text-ink"><th scope="row" className="border border-slate-200 px-4 py-3">Semester total</th>{semesterTotals.map((credits, index) => <td key={index} className="border border-slate-200 px-4 py-3">{credits}</td>)}<td className="border border-slate-200 px-4 py-3">{totalDistributionCredits}</td></tr></tbody></table></div> : <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Broad category of course</th><th className="px-4 py-3">Minimum credit</th><th className="px-4 py-3">Maximum credit</th></tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row) => <tr key={row.scope_type === "total" ? "total" : row.category}><td className="px-5 py-4 font-semibold text-slate-800">{row.scope_type === "total" ? "Total" : row.category ? broadCategoryLabels[row.category] ?? row.category : ""}</td><td className="px-4 py-4">{row.credit_value === "—" ? "—" : row.credit_value ? `${row.credit_value} cr` : "—"}</td><td className="px-4 py-4">{row.scope_type === "total" ? "—" : <><div>{format(row.maximum)}</div><div className="mt-1"><Source source={row.maximum_source} onRemove={(id) => void deleteOverride(id)} /></div></>}</td></tr>)}
+      {tableView === "distribution" && supportsSemesterDistribution ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1500px] border-collapse text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th scope="col" rowSpan={2} className="border border-slate-200 px-4 py-3">
+                  Course category
+                </th>
+                {semesterLabels.map((semester) => (
+                  <th scope="colgroup" key={semester} colSpan={4} className="border border-slate-200 px-4 py-3 text-center">
+                    Sem {semester}
+                  </th>
+                ))}
+                <th scope="col" rowSpan={2} className="border border-slate-200 px-4 py-3">
+                  Total credits
+                </th>
+              </tr>
+              <tr>
+                {semesterLabels.map((semester) => (
+                  <th
+                    scope="col"
+                    key={`${semester}-credits`}
+                    className="border border-slate-200 px-3 py-2"
+                  >
+                    Credits
+                  </th>
+                )).flatMap((creditsHeader, index) => [
+                  creditsHeader,
+                  <th scope="col" key={`${semesterLabels[index]}-l`} className="border border-slate-200 px-3 py-2">L (hrs)</th>,
+                  <th scope="col" key={`${semesterLabels[index]}-t`} className="border border-slate-200 px-3 py-2">T (hrs)</th>,
+                  <th scope="col" key={`${semesterLabels[index]}-p`} className="border border-slate-200 px-3 py-2">P (hrs)</th>,
+                ])}
+              </tr>
+            </thead>
+            <tbody>
+              {semesterDistribution.map((row) => {
+                const totalCredits =
+                  row.papers.reduce((total, paperCount) => total + paperCount, 0) *
+                  row.creditsPerPaper;
+                return (
+                  <tr key={row.category}>
+                    <th scope="row" className="border border-slate-200 px-4 py-3 font-semibold text-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => void fetchCategoryPapers(row.category)}
+                        disabled={!selectedProgrammeId || fetchingCategory}
+                        aria-expanded={selectedCategoryKey === normalizeCourseCategory(row.category)}
+                        className="text-left text-[#103b83] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
+                      >
+                        {row.category}
+                      </button>
+                    </th>
+                    {row.papers.flatMap((paperCount, index) =>
+                      [
+                        paperCount * row.creditsPerPaper,
+                        ...row.ltpPerPaper.map((hours) => hours * paperCount),
+                      ].map((value, valueIndex) => (
+                        <td
+                          key={`${index}-${valueIndex}`}
+                          className="border border-slate-200 px-3 py-3"
+                        >
+                          {value}
+                        </td>
+                      )),
+                    )}
+                    <td className="border border-slate-200 px-4 py-3">{totalCredits}</td>
+                  </tr>
+                );
+              })}
+              {selectedCategoryKey && (
+                <tr>
+                  <td colSpan={26} className="border border-slate-200 bg-blue-50/50 p-4">
+                    <h3 className="font-semibold text-slate-800">
+                      {semesterDistribution.find(
+                        (row) => normalizeCourseCategory(row.category) === selectedCategoryKey,
+                      )?.category} papers in {selectedLibraryDetail?.course_name}
+                    </h3>
+                    {fetchingCategory ? (
+                      <p role="status" className="mt-2 text-sm text-slate-500">
+                        Fetching category papers…
+                      </p>
+                    ) : selectedCategoryPapers.length ? (
+                      <div className="mt-3 overflow-x-auto">
+                        <table className="w-full min-w-[700px] text-left text-xs">
+                          <thead className="bg-white text-slate-500">
+                            <tr>
+                              <th className="border border-slate-200 px-3 py-2">Semester</th>
+                              <th className="border border-slate-200 px-3 py-2">Paper code</th>
+                              <th className="border border-slate-200 px-3 py-2">Paper title</th>
+                              <th className="border border-slate-200 px-3 py-2">L (hrs)</th>
+                              <th className="border border-slate-200 px-3 py-2">T (hrs)</th>
+                              <th className="border border-slate-200 px-3 py-2">P (hrs)</th>
+                              <th className="border border-slate-200 px-3 py-2">Credits</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white">
+                            {selectedCategoryPapers
+                              .slice()
+                              .sort((a, b) => a.semester - b.semester || a.paper_code.localeCompare(b.paper_code))
+                              .map((paper) => (
+                                <tr key={paper.id ?? paper.paper_code}>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.semester}</td>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.paper_code}</td>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.paper_title}</td>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.lecture_hours}</td>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.tutorial_hours}</td>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.practical_hours}</td>
+                                  <td className="border border-slate-200 px-3 py-2">{paper.credits}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm text-slate-500">
+                        No papers in this category for the selected programme.
+                      </p>
+                    )}
+                  </td>
+                </tr>
+              )}
+              <tr className="bg-slate-50 font-bold text-ink">
+                <th scope="row" className="border border-slate-200 px-4 py-3">
+                  Semester total
+                </th>
+                {semesterTotals.flatMap((credits, index) =>
+                  [credits, ...semesterLtpTotals[index]].map((value, valueIndex) => (
+                    <td
+                      key={`${index}-${valueIndex}`}
+                      className="border border-slate-200 px-3 py-3"
+                    >
+                      {value}
+                    </td>
+                  )),
+                )}
+                <td className="border border-slate-200 px-4 py-3">{totalDistributionCredits}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Broad category of course</th><th className="px-4 py-3">Minimum credit</th><th className="px-4 py-3">Maximum credit</th></tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row) => <tr key={row.scope_type === "total" ? "total" : row.category}><td className="px-5 py-4 font-semibold text-slate-800">{row.scope_type === "total" ? "Total" : row.category ? broadCategoryLabels[row.category] ?? row.category : ""}</td><td className="px-4 py-4">{row.credit_value === "—" ? "—" : row.credit_value ? `${row.credit_value} cr` : "—"}</td><td className="px-4 py-4">{row.scope_type === "total" ? "—" : <><div>{format(row.maximum)}</div><div className="mt-1"><Source source={row.maximum_source} onRemove={(id) => void deleteOverride(id)} /></div></>}</td></tr>)}
         {!rows.length && <tr><td colSpan={3} className="px-5 py-12 text-center text-sm text-slate-500">{loading ? "Loading credit limits…" : "No broad course-category credit table is available for this level."}</td></tr>}</tbody></table></div>}
     </section>
     <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-card">

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
-import { ArrowUpRight, BookOpen, Library, LoaderCircle, Save, Sparkles, Upload, X } from "lucide-react";
+import { ArrowUpRight, Library, LoaderCircle, Save, Sparkles, Upload, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import api from "../api/client";
 import PortalLayout from "../components/PortalLayout";
-import type { CourseLibraryDetail, CurriculumGeneration, Programme } from "../types";
+import type { CurriculumGeneration, Programme } from "../types";
 
 function getErrorMessage(error: unknown) {
   if (axios.isAxiosError(error)) return error.response?.data?.detail ?? "The request could not be completed.";
@@ -16,17 +16,9 @@ function toEditorValue(job: CurriculumGeneration) {
   return job.curriculum ? JSON.stringify(job.curriculum, null, 2) : "";
 }
 
-function formatCredits(value: string) {
-  const credits = Number(value);
-  return Number.isFinite(credits) ? credits.toFixed(2) : "0.00";
-}
-
 export default function CurriculumGenerationPage() {
   const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [programmeId, setProgrammeId] = useState("");
-  const [courseLibrary, setCourseLibrary] = useState<CourseLibraryDetail | null>(null);
-  const [loadingCourseLibrary, setLoadingCourseLibrary] = useState(false);
-  const [courseLibraryError, setCourseLibraryError] = useState("");
   const [sampleCurriculumFile, setSampleCurriculumFile] = useState<File | null>(null);
   const [sampleCurriculumUrl, setSampleCurriculumUrl] = useState("");
   const [generations, setGenerations] = useState<CurriculumGeneration[]>([]);
@@ -76,33 +68,6 @@ export default function CurriculumGenerationPage() {
     if (!programmeId) return;
     void loadGenerations(programmeId).catch((reason: unknown) => setError(getErrorMessage(reason)));
   }, [loadGenerations, programmeId]);
-
-  useEffect(() => {
-    if (!programmeId) {
-      setCourseLibrary(null);
-      setCourseLibraryError("");
-      return;
-    }
-
-    let active = true;
-    setCourseLibrary(null);
-    setCourseLibraryError("");
-    setLoadingCourseLibrary(true);
-    api.get<CourseLibraryDetail>(`/courses/library/${programmeId}`)
-      .then(({ data }) => {
-        if (active) setCourseLibrary(data);
-      })
-      .catch((reason: unknown) => {
-        if (active) setCourseLibraryError(getErrorMessage(reason));
-      })
-      .finally(() => {
-        if (active) setLoadingCourseLibrary(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [programmeId]);
 
   useEffect(() => {
     if (!sampleCurriculumFile) {
@@ -211,71 +176,6 @@ export default function CurriculumGenerationPage() {
       </div>
       {!loading && programmes.length === 0 && <p className="mt-4 text-sm text-slate-500">Create an active programme before generating a curriculum.</p>}
 
-      {programmeId && <div className="mt-6 border-t border-slate-100 pt-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <BookOpen size={17} className="text-navy" />
-              <h2 className="text-sm font-bold text-ink">Course library curriculum preview</h2>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">Reference courses and credit values for this programme, loaded from Course Library.</p>
-          </div>
-          <Link to="/admin/courses" className="text-xs font-semibold text-navy hover:underline">Open Course Library</Link>
-        </div>
-
-        {loadingCourseLibrary && <p className="mt-4 text-sm text-slate-500">Loading course library values…</p>}
-        {courseLibraryError && <p role="alert" className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{courseLibraryError}</p>}
-        {!loadingCourseLibrary && !courseLibraryError && courseLibrary && <>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl bg-slate-50 p-3">
-              <p className="text-xs font-medium text-slate-500">Total credits</p>
-              <p className="mt-1 text-xl font-black text-navy">{formatCredits(courseLibrary.total_credits)}</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-3">
-              <p className="text-xs font-medium text-slate-500">Total papers</p>
-              <p className="mt-1 text-xl font-black text-ink">{courseLibrary.total_papers}</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-3">
-              <p className="text-xs font-medium text-slate-500">Total semesters</p>
-              <p className="mt-1 text-xl font-black text-ink">{courseLibrary.total_semesters}</p>
-            </div>
-          </div>
-
-          {courseLibrary.papers.length === 0
-            ? <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">No papers are configured in Course Library for this programme yet. Add papers there to see the credit breakdown.</p>
-            : <div className="mt-4 space-y-3">
-              {courseLibrary.semesters.map((semester) => {
-                const papers = courseLibrary.papers.filter((paper) => paper.semester === semester.semester);
-                return <section key={semester.semester} className="overflow-hidden rounded-xl border border-slate-200">
-                  <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
-                    <h3 className="text-xs font-bold text-slate-700">Semester {semester.semester} <span className="font-normal text-slate-500">({semester.total_papers} papers)</span></h3>
-                    <p className="text-xs font-bold text-navy">{formatCredits(semester.total_credits)} credits</p>
-                  </div>
-                  {papers.length > 0 && <div className="overflow-x-auto">
-                    <table className="w-full min-w-[520px] text-left text-xs">
-                      <thead className="text-slate-500">
-                        <tr>
-                          <th className="px-4 py-2 font-semibold">Course code</th>
-                          <th className="px-4 py-2 font-semibold">Course</th>
-                          <th className="px-4 py-2 font-semibold">Category</th>
-                          <th className="px-4 py-2 text-right font-semibold">Credits</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {papers.map((paper) => <tr key={paper.id ?? `${paper.semester}-${paper.paper_code}`}>
-                          <td className="px-4 py-2 font-mono text-slate-600">{paper.paper_code}</td>
-                          <td className="px-4 py-2 font-medium text-slate-800">{paper.paper_title}</td>
-                          <td className="px-4 py-2 text-slate-600">{paper.category}</td>
-                          <td className="px-4 py-2 text-right font-semibold text-slate-800">{formatCredits(paper.credits)}</td>
-                        </tr>)}
-                      </tbody>
-                    </table>
-                  </div>}
-                </section>;
-              })}
-            </div>}
-        </>}
-      </div>}
     </section>
 
     <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-card sm:p-6">
